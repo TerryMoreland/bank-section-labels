@@ -110,7 +110,7 @@ class BankSectionLabelsOverlay extends Overlay
 		{
 			for (SectionDraw section : drawn)
 			{
-				drawSection(graphics, metrics, viewport, header, color, section);
+				drawSection(graphics, metrics, viewport, container, header, color, section);
 			}
 		}
 		finally
@@ -120,45 +120,38 @@ class BankSectionLabelsOverlay extends Overlay
 		return null;
 	}
 
-	private void drawSection(Graphics2D graphics, FontMetrics metrics, Rectangle viewport, int header, Color color, SectionDraw section)
+	private void drawSection(Graphics2D graphics, FontMetrics metrics, Rectangle viewport, Widget container, int header, Color color, SectionDraw section)
 	{
-		Widget anchor = section.anchor;
-		if (anchor == null)
+		if (section == null || section.text == null || container == null)
 		{
 			return;
 		}
-
-		Rectangle item;
+		net.runelite.api.Point origin;
 		try
 		{
-			if (anchor.isHidden())
-			{
-				return;
-			}
-			item = anchor.getBounds();
+			origin = container.getCanvasLocation();
 		}
 		catch (RuntimeException ex)
 		{
 			return;
 		}
-
-		if (item == null || item.width <= 0 || item.height <= 0)
+		if (origin == null)
 		{
 			return;
 		}
 
-		int top = item.y - header;
+		int scroll = container.getScrollY();
+		int top = origin.getY() + section.containerY - scroll;
+		int gap = section.height > 0 ? section.height : header;
+		// Stop two pixels short of the item row so the bar cannot cover icons.
+		int barHeight = Math.max(1, gap - 2);
 		int barX = viewport.x + 4;
 		int barW = Math.max(1, viewport.width - 8);
 		graphics.setColor(new Color(12, 10, 8, 220));
-		graphics.fillRect(barX, top, barW, Math.max(1, header - 1));
+		graphics.fillRect(barX, top, barW, barHeight);
 
-		int baseline = top + (header - metrics.getHeight()) / 2 + metrics.getAscent();
-		if (config.divider())
-		{
-			baseline -= 1;
-		}
-		int textX = Math.max(item.x, viewport.x + 8);
+		int baseline = top + (barHeight - metrics.getHeight()) / 2 + metrics.getAscent();
+		int textX = origin.getX() + section.textX;
 
 		graphics.setColor(new Color(0, 0, 0, 220));
 		graphics.drawString(section.text, textX + 1, baseline + 1);
@@ -167,19 +160,24 @@ class BankSectionLabelsOverlay extends Overlay
 
 		if (config.divider())
 		{
-			int lineY = item.y - 2;
+			int lineY = top + barHeight - 1;
+			graphics.setColor(color);
 			graphics.drawLine(barX, lineY, barX + barW, lineY);
 		}
 	}
 
 	static final class SectionDraw
 	{
-		final Widget anchor;
+		final int containerY;
+		final int height;
+		final int textX;
 		final String text;
 
-		SectionDraw(Widget anchor, String text)
+		SectionDraw(int containerY, int height, int textX, String text)
 		{
-			this.anchor = anchor;
+			this.containerY = containerY;
+			this.height = height;
+			this.textX = textX;
 			this.text = text;
 		}
 	}

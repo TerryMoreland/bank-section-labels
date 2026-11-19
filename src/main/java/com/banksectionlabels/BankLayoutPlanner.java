@@ -51,6 +51,9 @@ public final class BankLayoutPlanner
 	/** Vanilla distance from one column to the next. */
 	public static final int COLUMN_STRIDE = 48;
 
+	/** Left edge of the first bank column. */
+	public static final int START_X = 51;
+
 	private BankLayoutPlanner()
 	{
 	}

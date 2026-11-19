@@ -1,31 +1,27 @@
 # Bank Section Labels
 
-A RuneLite plugin that draws your own text headings above groups of items in the **regular bank** (the vanilla tabs, including the main “all items” tab). It is not a Bank Tags layout. Each labeled item starts a new row, with the heading in the gap above it. The rest of the previous row is left empty.
+A RuneLite plugin that draws your own text headings above groups of items in the **regular bank** (the vanilla tabs, including the main “all items” tab). Each section is a grid you arrange yourself, including empty cells, so a Barrows set can sit in one row as helm, body, legs, weapon.
 
 ## How to use it
 
-1. Open the bank and switch to the tab you want, or stay on the main all-items tab.
-2. Hold **Shift** and right-click the item that should lead the group. A placeholder is fine if you do not have another of that item.
-3. Choose **Add section label**, type the name, and press Enter.
-4. That item moves to the start of a new row. The heading sits in the gap above it. Items that were already after it in the bank fill the rest of that row, then the rows under it.
-5. To put more items in the group, drag them with the normal bank drag and drop them onto an item in the group. In insert mode, the dragged item takes that item’s place and the others shift. Drop onto the first item of the **next** group to add at the end of this one. The real bank order changes, so the group is still there the next time you open the bank.
-6. Hold Shift and right-click a different item, then add another label. That starts a second group on its own row. It does not replace the first label.
-7. Shift-right-click the leading item again for **Edit section label** or **Remove section label**.
+1. Open a normal bank tab, or the main all-items tab. If a Bank Tags tag tab is open, close it first. Sections step aside while a tag tab or a Bank Tag Layout is active.
+2. Hold **Shift** and right-click the item that should lead the group. A placeholder counts if that is the only copy you have.
+3. Choose **Add section label**, type a name, and press Enter. That item moves to the start of a new row. The heading is in the gap above it, and the rest of the row is empty.
+4. Drag other bank items into those empty spaces, or drop them on the leading item. They stay in the cell where you dropped them, including after you close the bank. Withdraw still takes the real item.
+5. To line up a set, drop helm, body, legs, and weapon across one row. Leave a cell blank if you want a gap. When a row is full, another empty row appears for the next set.
+6. Shift-right-click a different item and add another label. That is a second section and does not replace the first.
+7. Shift-right-click the leading item for **Edit section label** or **Remove section**. Shift-right-click any other item in the section for **Remove from section**.
 
-Turn **Require Shift for label menu** off in the plugin settings if you want those options on a normal right-click.
+Turn **Require Shift for label menu** off if you want those options on a normal right-click.
 
-The blank spaces at the end of a group’s row are not drop targets. The bank only accepts a drop on a real item widget, and a fake widget there would point at the wrong bank slot. Drop on the last item of the group, or on the first item of the next group.
+The grid is saved per account. It does not depend on the order of items in the real bank, which cannot store an empty slot in the middle of a row.
 
 ### What a label sticks to
 
-A label belongs to one vanilla bank tab plus the item you clicked.
-
-- Tabs 1–9 keep their own labels. The main “all items” view is tab 0 and has its own labels, because the all-items view inserts the game’s tab separators and the rows are not the same.
-- If you withdraw or deposit items around the labeled item, the heading follows that item onto whatever row it lands on.
-- A placeholder of that item counts as the same item, so releasing a stack down to its placeholder keeps the heading.
-- Two stacks of the same item can have different headings. The plugin counts copies from left to right, top to bottom. Labeling the first stack is the stable choice.
-- While bank search is open, headings are hidden and the items go back to the normal search layout. Placeholders, withdraw, and deposit are unchanged.
-- Bank Tags tag tabs and the potion storage are left alone. Those views are not the vanilla tab grid.
+- Each normal bank tab has its own sections. The main all-items view is tab 0 and is separate from tabs 1–9.
+- A placeholder of an item counts as that item, so a section still shows the item if a placeholder is all you have.
+- While bank search is open, headings are hidden and the bank is left as the game drew it.
+- Bank Tags tag tabs, Bank Tag Layouts, and the potion storage are left alone.
 
 Labels are saved per account with RuneLite’s profile config, so they come back the next time you log in on that account.
 
@@ -44,18 +40,17 @@ If a font is clipped, raise the header height. The default (24px) fits the bold 
 
 ## How the spacing works
 
-After the bank’s own layout script finishes (`BANKMAIN_FINISHBUILDING`), the plugin walks the visible items in bank order. When it reaches a labeled item that is not already in the first column, it stops the current row and starts that item at column 0 of the next row, with the header height inserted above it. Later items keep flowing in order until the next labeled item, which starts another row. Each item widget is moved with `setOriginalX`, `setOriginalY`, and `revalidate`. The scroll height grows to fit, and the scrollbar script runs again.
+Each section stores an ordered list of item ids for that tab, and `-1` means an empty cell. After the bank builds, the plugin moves the real item widgets onto those cells with `setOriginalX`, `setOriginalY`, and `revalidate`, and puts an invisible drop target on every empty cell. The widget’s bank-slot index is not changed, so withdraw and deposit still hit the real item. A drop onto a section cell updates the saved grid and does not send a bank rearrange. The heading is drawn in the reserved gap above that section’s first row, using the same coordinates as the items, on a layer above the bank so it stays visible with 117 HD.
 
-That is the same widget move Bank Tags uses for layouts. The widget’s child index is still the real bank slot, so withdraw, deposit, placeholders, and the normal drag (insert or swap) hit the item you see. Dragging really changes the bank order. The menu entries this plugin adds are client-side only (`MenuAction.RUNELITE`).
-
-Headings are drawn above the bank, on a dark bar, clipped to the item container, so they stay readable over the bank and with 117 HD.
+If a Bank Tags tag tab or a Bank Tag Layout is open, the plugin does not move anything.
 
 ## Limitations
 
 - Headings are per vanilla tab. A label made on tab 6 does not also appear on the all-items tab. Add it there separately if you want it in both views.
 - Search, Bank Tags tag tabs, and potion storage hide the headings. If a tag tab is open, items are not shifted.
 - Duplicate item ids are told apart by visual order. Withdrawing an earlier copy of the same item makes a later copy take its place in that count. Labeling a unique item (the usual section start) does not have this problem.
-- The empty end of a group’s row is not a drop target. Drop on a real item in the group, or on the first item of the next group to append.
+- A Bank Tags tag tab, or a Bank Tag Layout that is turned on, is left alone. Open a regular bank tab to edit sections.
+- The all-items tab hides the game’s “Tab 1” separator lines while you have sections, so the headings are not drawn on top of those lines.
 - Clicks in the empty gap hit the bank background, not an item. Clicks on the items themselves still withdraw and deposit.
 - Another plugin that moves bank item widgets later in the same frame can fight this one. This plugin runs after the normal bank build and after Bank Tags’ layout pass.
 - Very large header heights, or a heading on many rows, make the bank scroll further. That is the inserted space.

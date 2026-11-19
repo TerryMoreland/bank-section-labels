@@ -27,13 +27,17 @@ package com.banksectionlabels;
 import com.google.inject.Provides;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.ItemComposition;
 import net.runelite.api.KeyCode;
 import net.runelite.api.MenuAction;
+import net.runelite.api.ScriptEvent;
 import net.runelite.api.ScriptID;
 import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.ScriptPostFired;
@@ -43,7 +47,9 @@ import net.runelite.api.gameval.ItemID;
 import net.runelite.api.gameval.VarClientID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.vars.InputType;
+import net.runelite.api.widgets.JavaScriptCallback;
 import net.runelite.api.widgets.Widget;
+import net.runelite.api.widgets.WidgetType;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -60,14 +66,11 @@ import net.runelite.client.plugins.banktags.BankTagsService;
 import net.runelite.client.ui.overlay.OverlayManager;
 
 /**
- * Starts each labeled item on its own row in the vanilla bank, then draws the
- * heading in the gap above that row.
- * <p>
- * Widget X and Y are changed with {@code setOriginalX}, {@code setOriginalY},
- * and {@code revalidate}, the same approach Bank Tags uses to place items.
- * Child indexes, item ids, and menu actions are left alone, so a drag, withdraw,
- * or deposit still hits the real bank slot of the item you see. The scroll
- * height grows so the last rows stay reachable.
+ * Each section is its own grid of item ids, including empty cells. Widgets are
+ * moved with {@code setOriginalX}, {@code setOriginalY}, and {@code revalidate}.
+ * Their bank-slot indexes stay the same, so withdraw and deposit still hit the
+ * real item. Drops onto a section cell, including an empty one, update the
+ * saved grid instead of the vanilla bank order.
  */
 @Slf4j
 @PluginDescriptor(
@@ -89,8 +92,10 @@ public class BankSectionLabelsPlugin extends Plugin
 
 	private static final String ADD_LABEL = "Add section label";
 	private static final String EDIT_LABEL = "Edit section label";
-	private static final String REMOVE_LABEL = "Remove section label";
+	private static final String REMOVE_SECTION = "Remove section";
+	private static final String REMOVE_FROM_SECTION = "Remove from section";
 	private static final String EXAMINE = "Examine";
+	private static final String PROXY_NAME = "bsl-cell";
 
 	@Inject
 	private Client client;
@@ -123,6 +128,13 @@ public class BankSectionLabelsPlugin extends Plugin
 	private OverlayManager overlayManager;
 
 	private int layoutGeneration;
+	private int layoutColumns = 8;
+	private long handledDropNanos;
+	private final List<Widget> proxies = new ArrayList<>();
+	private final Map<Widget, int[]> proxyCells = new HashMap<>();
+	private final Map<Integer, int[]> cellByBankIndex = new HashMap<>();
+	private final List<SectionLayout.Slot> hitSlots = new ArrayList<>();
+	private List<SectionLayout.Section> tabSections = new ArrayList<>();
 
 	@Override
 	protected void startUp()
@@ -199,30 +211,41 @@ public class BankSectionLabelsPlugin extends Plugin
 			return;
 		}
 
-		List<BankLayoutPlanner.ItemSlot> slots = visibleItems(container);
-		int occurrence = BankLayoutPlanner.occurrenceOf(slots, item.getIndex(), identity());
-		if (occurrence < 0)
+		int[] placed = cellByBankIndex.get(item.getIndex());
+		String target = event.getTarget();
+		int tab = currentTab();
+		int itemId = normalizeId(item.getItemId());
+		if (itemId < 0)
 		{
 			return;
 		}
 
-		int tab = currentTab();
-		int itemId = BankLayoutPlanner.normalize(item.getItemId(), identity());
-		String existing = SectionLabels.textFor(loadLabels(), tab, itemId, occurrence);
-		String target = event.getTarget();
-
-		if (existing == null)
+		if (placed == null)
 		{
-			addMenuEntry(ADD_LABEL, target, () -> promptForLabel(tab, itemId, occurrence, ""));
+			addMenuEntry(ADD_LABEL, target, () -> promptForLabel(tab, itemId, ""));
+			return;
+		}
+		if (placed[1] == 0)
+		{
+			final int sectionIndex = placed[0];
+			String name = sectionIndex >= 0 && sectionIndex < tabSections.size()
+				? tabSections.get(sectionIndex).getName() : "";
+			addMenuEntry(REMOVE_SECTION, target, () ->
+			{
+				saveTabSections(SectionLayout.removeSection(tabSections, sectionIndex));
+				relayout();
+			});
+			addMenuEntry(EDIT_LABEL, target, () -> promptForLabel(tab, itemId, name));
 		}
 		else
 		{
-			addMenuEntry(REMOVE_LABEL, target, () ->
+			final int sectionIndex = placed[0];
+			final int cellIndex = placed[1];
+			addMenuEntry(REMOVE_FROM_SECTION, target, () ->
 			{
-				saveLabels(SectionLabels.remove(loadLabels(), tab, itemId, occurrence));
+				saveTabSections(SectionLayout.clearCell(tabSections, sectionIndex, cellIndex));
 				relayout();
 			});
-			addMenuEntry(EDIT_LABEL, target, () -> promptForLabel(tab, itemId, occurrence, existing));
 		}
 	}
 
@@ -239,143 +262,359 @@ public class BankSectionLabelsPlugin extends Plugin
 		}
 
 		int generation = ++layoutGeneration;
-		Widget container = client.getWidget(InterfaceID.Bankmain.ITEMS);
-		if (container == null || !BankLayoutPlanner.shouldAdjust(config.enabled(), isSearching(), isTagTabOpen(), isPotionStorage()))
+		try
 		{
-			overlay.setSections(Collections.emptyList());
-			return;
+			Widget container = client.getWidget(InterfaceID.Bankmain.ITEMS);
+			if (container == null || !layoutAllowed())
+			{
+				clearLayoutVisuals();
+				return;
+			}
+			applyLayout(container);
+			clientThread.invokeLater(() -> updateScrollbar(generation));
 		}
-
-		applySpacing(container);
-		clientThread.invokeLater(() -> updateScrollbar(generation));
+		catch (RuntimeException ex)
+		{
+			log.warn("Bank section layout failed", ex);
+			clearLayoutVisuals();
+		}
 	}
 
-	private void applySpacing(Widget container)
+	private void applyLayout(Widget container)
 	{
-		Widget[] children = container.getChildren();
-		if (children == null)
-		{
-			overlay.setSections(Collections.emptyList());
-			return;
-		}
-
-		List<BankLayoutPlanner.ItemSlot> slots = visibleItems(container);
-		List<SectionLabel> labels = SectionLabels.forTab(loadLabels(), currentTab());
-		BankLayoutPlanner.Result plan = BankLayoutPlanner.plan(slots, labels, config.headerHeight(), identity(), container.getWidth());
-		if (plan.isEmpty())
-		{
-			overlay.setSections(Collections.emptyList());
-			return;
-		}
-
-		for (Widget child : children)
-		{
-			if (child == null || child.isSelfHidden())
-			{
-				continue;
-			}
-			BankLayoutPlanner.Placement placement = plan.placementFor(child.getIndex());
-			if (placement != null)
-			{
-				if (child.getOriginalX() != placement.getX() || child.getOriginalY() != placement.getY())
-				{
-					child.setOriginalX(placement.getX());
-					child.setOriginalY(placement.getY());
-					child.revalidate();
-				}
-				continue;
-			}
-			if (isItemWidget(child))
-			{
-				continue;
-			}
-			int separatorY = plan.yForNonItem(child.getOriginalY(), child.getOriginalHeight());
-			if (separatorY != child.getOriginalY())
-			{
-				child.setOriginalY(separatorY);
-				child.revalidate();
-			}
-		}
-
-		int bottom = 0;
-		for (Widget child : children)
-		{
-			if (child == null || child.isSelfHidden())
-			{
-				continue;
-			}
-			bottom = Math.max(bottom, child.getOriginalY() + child.getOriginalHeight());
-		}
-		// Keep the vanilla 4px row padding, plus a little room under the last row.
-		bottom += BankLayoutPlanner.ROW_STRIDE - BankLayoutPlanner.ITEM_HEIGHT + 4;
-		container.setScrollHeight(Math.max(bottom, container.getHeight()));
-
-		List<BankSectionLabelsOverlay.SectionDraw> drawn = new ArrayList<>();
-		for (BankLayoutPlanner.PlacedLabel label : plan.getLabels())
-		{
-			Widget anchor = container.getChild(label.getAnchorIndex());
-			if (anchor != null)
-			{
-				drawn.add(new BankSectionLabelsOverlay.SectionDraw(anchor, label.getText()));
-			}
-		}
-		overlay.setSections(drawn);
-		log.debug("Placed {} section label(s) on bank tab {}", drawn.size(), currentTab());
-	}
-
-	private void updateScrollbar(int generation)
-	{
-		if (generation != layoutGeneration)
-		{
-			return;
-		}
-		Widget container = client.getWidget(InterfaceID.Bankmain.ITEMS);
 		if (container == null)
 		{
 			return;
 		}
-
-		int scrollY = container.getScrollY();
-		int maxScroll = Math.max(0, container.getScrollHeight() - container.getHeight());
-		if (scrollY > maxScroll)
+		Widget[] children = container.getChildren();
+		if (children == null)
 		{
-			scrollY = maxScroll;
-			container.setScrollY(scrollY);
-			client.setVarcIntValue(VarClientID.BANK_SCROLLPOS, scrollY);
+			clearLayoutVisuals();
+			return;
 		}
 
-		client.runScript(
-			ScriptID.UPDATE_SCROLLBAR,
-			InterfaceID.Bankmain.SCROLLBAR,
-			InterfaceID.Bankmain.ITEMS,
-			scrollY
-		);
+		hideProxies(children);
+		int tab = currentTab();
+		tabSections = SectionLayout.forTab(loadSections(), tab);
+		if (tabSections.isEmpty())
+		{
+			clearLayoutVisuals();
+			return;
+		}
+
+		List<Widget> items = new ArrayList<>();
+		for (Widget child : children)
+		{
+			if (child == null)
+			{
+				continue;
+			}
+			if (PROXY_NAME.equals(child.getName()))
+			{
+				continue;
+			}
+			if (isItemWidget(child))
+			{
+				items.add(child);
+			}
+			else if (!child.isSelfHidden())
+			{
+				// Tab separator lines on the all-items tab would sit on top of the new grid.
+				child.setHidden(true);
+			}
+		}
+		items.sort(Comparator.comparingInt(Widget::getIndex));
+
+		layoutColumns = detectColumns(items, container);
+		SectionLayout.Spec spec = new SectionLayout.Spec(
+			layoutColumns,
+			Math.max(1, config.headerHeight()),
+			BankLayoutPlanner.START_X,
+			BankLayoutPlanner.COLUMN_STRIDE,
+			BankLayoutPlanner.ROW_STRIDE);
+		SectionLayout.Arrangement arranged = SectionLayout.arrange(countLoose(items, tabSections), tabSections, spec);
+		boolean[] used = new boolean[items.size()];
+		cellByBankIndex.clear();
+		hitSlots.clear();
+		hitSlots.addAll(arranged.getCells());
+
+		for (SectionLayout.Slot slot : arranged.getCells())
+		{
+			if (slot.isEmpty() || slot.getItemId() < 0)
+			{
+				createProxy(container, slot);
+				continue;
+			}
+			int match = takeMatch(items, used, slot.getItemId());
+			if (match < 0)
+			{
+				createProxy(container, slot);
+				continue;
+			}
+			placeWidget(items.get(match), slot.getX(), slot.getY());
+			cellByBankIndex.put(items.get(match).getIndex(), new int[]{slot.getSectionIndex(), slot.getCellIndex()});
+			armDrag(items.get(match));
+		}
+
+		int looseOrdinal = 0;
+		for (int i = 0; i < items.size(); i++)
+		{
+			if (used[i])
+			{
+				continue;
+			}
+			if (looseOrdinal >= arranged.getLooseSlots().size())
+			{
+				break;
+			}
+			SectionLayout.Slot slot = arranged.getLooseSlots().get(looseOrdinal++);
+			placeWidget(items.get(i), slot.getX(), slot.getY());
+			armDrag(items.get(i));
+		}
+
+		int bottom = arranged.getContentBottom() + 8;
+		int viewport = container.getHeight();
+		container.setScrollHeight(Math.max(bottom, viewport));
+
+		List<BankSectionLabelsOverlay.SectionDraw> drawn = new ArrayList<>();
+		for (SectionLayout.Header header : arranged.getHeaders())
+		{
+			if (header == null || header.getName() == null)
+			{
+				continue;
+			}
+			drawn.add(new BankSectionLabelsOverlay.SectionDraw(header.getY(), header.getHeight(), header.getX(), header.getName()));
+		}
+		overlay.setSections(drawn);
+		log.debug("Placed {} section label(s) on bank tab {}", drawn.size(), tab);
 	}
 
-	private void promptForLabel(int tab, int itemId, int occurrence, String initial)
+	private int countLoose(List<Widget> items, List<SectionLayout.Section> sections)
 	{
+		boolean[] used = new boolean[items.size()];
+		if (sections != null)
+		{
+			for (SectionLayout.Section section : sections)
+			{
+				for (Integer itemId : section.getCells())
+				{
+					if (itemId == null || itemId < 0)
+					{
+						continue;
+					}
+					takeMatch(items, used, itemId);
+				}
+			}
+		}
+		int loose = 0;
+		for (boolean taken : used)
+		{
+			if (!taken)
+			{
+				loose++;
+			}
+		}
+		return loose;
+	}
+
+	private int takeMatch(List<Widget> items, boolean[] used, int itemId)
+	{
+		int wanted = normalizeId(itemId);
+		for (int i = 0; i < items.size(); i++)
+		{
+			if (used[i])
+			{
+				continue;
+			}
+			Widget widget = items.get(i);
+			if (widget != null && normalizeId(widget.getItemId()) == wanted)
+			{
+				used[i] = true;
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	private void updateScrollbar(int generation)
+	{
+		try
+		{
+			if (generation != layoutGeneration || client == null)
+			{
+				return;
+			}
+			Widget container = client.getWidget(InterfaceID.Bankmain.ITEMS);
+			if (container == null || container.isHidden())
+			{
+				return;
+			}
+
+			int scrollY = container.getScrollY();
+			int height = container.getHeight();
+			int maxScroll = Math.max(0, container.getScrollHeight() - height);
+			if (scrollY > maxScroll)
+			{
+				scrollY = maxScroll;
+				container.setScrollY(scrollY);
+				client.setVarcIntValue(VarClientID.BANK_SCROLLPOS, scrollY);
+			}
+
+			client.runScript(
+				ScriptID.UPDATE_SCROLLBAR,
+				InterfaceID.Bankmain.SCROLLBAR,
+				InterfaceID.Bankmain.ITEMS,
+				scrollY
+			);
+		}
+		catch (RuntimeException ex)
+		{
+			log.debug("Could not update the bank scrollbar", ex);
+		}
+	}
+
+	private void promptForLabel(int tab, int itemId, String initial)
+	{
+		if (chatboxPanelManager == null)
+		{
+			return;
+		}
 		chatboxPanelManager.openTextInput("Section label (leave empty to remove)")
 			.value(initial == null ? "" : initial)
 			.onDone(value ->
 			{
-				String text = SectionLabels.sanitize(value);
-				List<SectionLabel> labels = loadLabels();
-				if (text.isEmpty())
+				try
 				{
-					labels = SectionLabels.remove(labels, tab, itemId, occurrence);
+					String text = SectionLabels.sanitize(value);
+					List<SectionLayout.Section> all = loadSections();
+					List<SectionLayout.Section> tabSectionsNow = SectionLayout.forTab(all, tab);
+					int existing = sectionWithHead(tabSectionsNow, itemId);
+					if (text.isEmpty())
+					{
+						if (existing >= 0)
+						{
+							tabSectionsNow = SectionLayout.removeSection(tabSectionsNow, existing);
+						}
+					}
+					else if (existing >= 0)
+					{
+						tabSectionsNow = SectionLayout.rename(tabSectionsNow, existing, text);
+					}
+					else
+					{
+						tabSectionsNow = SectionLayout.addSection(tabSectionsNow, tab, text, layoutColumns, itemId);
+					}
+					saveSections(SectionLayout.replaceTab(all, tab, tabSectionsNow));
+					relayout();
 				}
-				else
+				catch (RuntimeException ex)
 				{
-					labels = SectionLabels.upsert(labels, new SectionLabel(tab, itemId, occurrence, text));
+					log.warn("Could not save section label", ex);
 				}
-				saveLabels(labels);
-				relayout();
 			})
 			.build();
 	}
 
+	private void onDragComplete(ScriptEvent event)
+	{
+		try
+		{
+			if (event == null || client == null || !layoutAllowed())
+			{
+				return;
+			}
+			Widget source = event.getSource();
+			if (source == null)
+			{
+				source = client.getDraggedWidget();
+			}
+			if (!isItemWidget(source))
+			{
+				return;
+			}
+			int[] destination = destinationCell(event.getTarget() != null ? event.getTarget() : client.getDraggedOnWidget(), event);
+			if (destination == null)
+			{
+				return;
+			}
+			long now = System.nanoTime();
+			if (now - handledDropNanos < 200_000_000L)
+			{
+				client.setDraggedOnWidget(null);
+				return;
+			}
+			handledDropNanos = now;
+			client.setDraggedOnWidget(null);
+
+			int[] sourceCell = cellByBankIndex.get(source.getIndex());
+			int sourceSection = sourceCell == null ? -1 : sourceCell[0];
+			int sourceIndex = sourceCell == null ? -1 : sourceCell[1];
+			int sourceItem = normalizeId(source.getItemId());
+			if (sourceItem < 0)
+			{
+				return;
+			}
+			saveTabSections(SectionLayout.drop(tabSections, sourceSection, sourceIndex, sourceItem, destination[0], destination[1]));
+			relayout();
+		}
+		catch (RuntimeException ex)
+		{
+			log.warn("Section drop failed", ex);
+		}
+	}
+
+	private int[] destinationCell(Widget target, ScriptEvent event)
+	{
+		if (target != null)
+		{
+			int[] proxy = proxyCells.get(target);
+			if (proxy != null)
+			{
+				return proxy;
+			}
+			if (isItemWidget(target))
+			{
+				int[] placed = cellByBankIndex.get(target.getIndex());
+				if (placed != null)
+				{
+					return placed;
+				}
+			}
+		}
+		if (client == null || hitSlots.isEmpty())
+		{
+			return null;
+		}
+		Widget container = client.getWidget(InterfaceID.Bankmain.ITEMS);
+		net.runelite.api.Point mouse = client.getMouseCanvasPosition();
+		net.runelite.api.Point origin = container == null ? null : container.getCanvasLocation();
+		if (container == null || mouse == null || origin == null)
+		{
+			return null;
+		}
+		int localX = mouse.getX() - origin.getX();
+		int localY = mouse.getY() - origin.getY() + container.getScrollY();
+		for (SectionLayout.Slot slot : hitSlots)
+		{
+			if (slot.getSectionIndex() < 0)
+			{
+				continue;
+			}
+			if (localX >= slot.getX() && localX < slot.getX() + BankLayoutPlanner.COLUMN_STRIDE
+				&& localY >= slot.getY() && localY < slot.getY() + BankLayoutPlanner.ROW_STRIDE)
+			{
+				return new int[]{slot.getSectionIndex(), slot.getCellIndex()};
+			}
+		}
+		return null;
+	}
+
 	private void addMenuEntry(String option, String target, Runnable action)
 	{
+		if (client == null || client.getMenu() == null || action == null)
+		{
+			return;
+		}
 		client.getMenu().createMenuEntry(-1)
 			.setOption(option)
 			.setTarget(target)
@@ -441,31 +680,61 @@ public class BankSectionLabelsPlugin extends Plugin
 		};
 	}
 
-	private List<SectionLabel> loadLabels()
+	private List<SectionLayout.Section> loadSections()
 	{
-		return SectionLabels.decode(configManager.getRSProfileConfiguration(CONFIG_GROUP, LABELS_KEY));
+		if (configManager == null)
+		{
+			return new ArrayList<>();
+		}
+		return SectionLayout.decode(configManager.getRSProfileConfiguration(CONFIG_GROUP, LABELS_KEY));
 	}
 
-	private void saveLabels(List<SectionLabel> labels)
+	private void saveSections(List<SectionLayout.Section> sections)
 	{
-		if (labels.isEmpty())
+		if (configManager == null)
+		{
+			return;
+		}
+		if (sections == null || sections.isEmpty())
 		{
 			configManager.unsetRSProfileConfiguration(CONFIG_GROUP, LABELS_KEY);
 			return;
 		}
-		configManager.setRSProfileConfiguration(CONFIG_GROUP, LABELS_KEY, SectionLabels.encode(labels));
+		configManager.setRSProfileConfiguration(CONFIG_GROUP, LABELS_KEY, SectionLayout.encode(sections));
+	}
+
+	private void saveTabSections(List<SectionLayout.Section> updatedTab)
+	{
+		int tab = currentTab();
+		saveSections(SectionLayout.replaceTab(loadSections(), tab, updatedTab));
+		tabSections = updatedTab == null ? new ArrayList<>() : updatedTab;
 	}
 
 	private void relayout()
 	{
+		if (clientThread == null)
+		{
+			return;
+		}
 		clientThread.invokeLater(() ->
 		{
-			Widget container = client.getWidget(InterfaceID.Bankmain.ITEMS);
-			if (container == null || container.isHidden())
+			try
 			{
-				return;
+				if (client == null || bankSearch == null)
+				{
+					return;
+				}
+				Widget container = client.getWidget(InterfaceID.Bankmain.ITEMS);
+				if (container == null || container.isHidden())
+				{
+					return;
+				}
+				bankSearch.layoutBank();
 			}
-			bankSearch.layoutBank();
+			catch (RuntimeException ex)
+			{
+				log.debug("Could not rebuild the bank layout", ex);
+			}
 		});
 	}
 
@@ -484,13 +753,189 @@ public class BankSectionLabelsPlugin extends Plugin
 		// Only the live search-input mode. A closed chatbox can leave text in
 		// MESLAYERINPUT (including a heading the user just typed), and that must
 		// not be treated as bank search.
+		if (client == null)
+		{
+			return false;
+		}
 		return client.getVarcIntValue(VarClientID.MESLAYERMODE) == InputType.SEARCH.getType();
 	}
 
 	private boolean isTagTabOpen()
 	{
-		String tag = bankTagsService.getActiveTag();
-		return (tag != null && !tag.isEmpty()) || bankTagsService.getActiveLayout() != null;
+		try
+		{
+			if (bankTagsService == null)
+			{
+				return false;
+			}
+			String tag = bankTagsService.getActiveTag();
+			return (tag != null && !tag.isEmpty()) || bankTagsService.getActiveLayout() != null;
+		}
+		catch (RuntimeException ex)
+		{
+			return false;
+		}
+	}
+
+	private boolean layoutAllowed()
+	{
+		try
+		{
+			return config != null && BankLayoutPlanner.shouldAdjust(config.enabled(), isSearching(), isTagTabOpen(), isPotionStorage());
+		}
+		catch (RuntimeException ex)
+		{
+			return false;
+		}
+	}
+
+	private void clearLayoutVisuals()
+	{
+		cellByBankIndex.clear();
+		hitSlots.clear();
+		overlay.setSections(Collections.emptyList());
+	}
+
+	private void hideProxies(Widget[] children)
+	{
+		if (children != null)
+		{
+			for (Widget child : children)
+			{
+				if (child != null && PROXY_NAME.equals(child.getName()))
+				{
+					child.setHidden(true);
+				}
+			}
+		}
+		for (Widget proxy : proxies)
+		{
+			try
+			{
+				if (proxy != null)
+				{
+					proxy.setHidden(true);
+				}
+			}
+			catch (RuntimeException ignored)
+			{
+				// The bank build already destroyed this proxy.
+			}
+		}
+		proxies.clear();
+		proxyCells.clear();
+	}
+
+	private void createProxy(Widget container, SectionLayout.Slot slot)
+	{
+		if (container == null || slot == null)
+		{
+			return;
+		}
+		Widget proxy = container.createChild(-1, WidgetType.RECTANGLE);
+		if (proxy == null)
+		{
+			return;
+		}
+		proxy.setName(PROXY_NAME);
+		proxy.setOriginalX(slot.getX());
+		proxy.setOriginalY(slot.getY());
+		proxy.setOriginalWidth(BankLayoutPlanner.COLUMN_STRIDE);
+		proxy.setOriginalHeight(BankLayoutPlanner.ROW_STRIDE);
+		proxy.setOpacity(255);
+		proxy.setFilled(false);
+		proxy.setHidden(false);
+		proxy.setHasListener(true);
+		proxy.setNoClickThrough(true);
+		proxy.setDragParent(container);
+		proxy.setOnDragCompleteListener((JavaScriptCallback) this::onDragComplete);
+		proxy.revalidate();
+		proxies.add(proxy);
+		proxyCells.put(proxy, new int[]{slot.getSectionIndex(), slot.getCellIndex()});
+	}
+
+	private void placeWidget(Widget widget, int x, int y)
+	{
+		if (widget == null)
+		{
+			return;
+		}
+		if (widget.getOriginalX() != x || widget.getOriginalY() != y)
+		{
+			widget.setOriginalX(x);
+			widget.setOriginalY(y);
+			widget.revalidate();
+		}
+	}
+
+	private void armDrag(Widget widget)
+	{
+		if (widget == null)
+		{
+			return;
+		}
+		widget.setOnDragCompleteListener((JavaScriptCallback) this::onDragComplete);
+	}
+
+	private int sectionWithHead(List<SectionLayout.Section> sections, int itemId)
+	{
+		if (sections == null)
+		{
+			return -1;
+		}
+		for (int i = 0; i < sections.size(); i++)
+		{
+			List<Integer> cells = sections.get(i).getCells();
+			if (!cells.isEmpty() && cells.get(0) != null && normalizeId(cells.get(0)) == itemId)
+			{
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	private int detectColumns(List<Widget> items, Widget container)
+	{
+		int fullest = 1;
+		Map<Integer, Integer> rows = new HashMap<>();
+		if (items != null)
+		{
+			for (Widget item : items)
+			{
+				if (item == null)
+				{
+					continue;
+				}
+				int count = rows.getOrDefault(item.getOriginalY(), 0) + 1;
+				rows.put(item.getOriginalY(), count);
+				if (count > fullest)
+				{
+					fullest = count;
+				}
+			}
+		}
+		int columns = Math.max(8, fullest);
+		if (container != null)
+		{
+			int guess = (container.getWidth() - BankLayoutPlanner.START_X) / BankLayoutPlanner.COLUMN_STRIDE;
+			if (guess >= 10 && guess <= 16)
+			{
+				columns = Math.max(columns, guess);
+			}
+		}
+		return columns;
+	}
+
+	private int normalizeId(int itemId)
+	{
+		try
+		{
+			return BankLayoutPlanner.normalize(itemId, identity());
+		}
+		catch (RuntimeException ex)
+		{
+			return itemId;
+		}
 	}
 
 }
