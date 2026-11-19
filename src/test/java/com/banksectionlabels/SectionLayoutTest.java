@@ -446,6 +446,85 @@ public class SectionLayoutTest
 		assertTrue(placed(view, 1).getY() < placed(view, 0).getY());
 	}
 
+	@Test
+	public void besideDropStaysOnTheSameRowAndBelowDropUsesTheNextRow()
+	{
+		List<SectionLayout.Section> sections = Collections.singletonList(
+			new SectionLayout.Section(2, 1, "Melee", SectionLayout.cells(HELM)));
+		SectionLayout.Spec spec = SectionLayout.spec(8, 24);
+		SectionLayout.BankView dragging = SectionLayout.layoutTab(
+			Collections.singletonList(new SectionLayout.BankItem(0, HELM)),
+			2,
+			sections,
+			spec,
+			true);
+
+		SectionLayout.Placed helm = null;
+		SectionLayout.Placed beside = null;
+		SectionLayout.Placed below = null;
+		for (SectionLayout.Placed placed : dragging.getPlaced())
+		{
+			if (!placed.isEmpty() && placed.getBankIndex() == 0)
+			{
+				helm = placed;
+			}
+			if (placed.isEmpty() && placed.getSectionIndex() == 0 && placed.getCellIndex() == 1)
+			{
+				beside = placed;
+			}
+			if (placed.isEmpty() && placed.getSectionIndex() == 0 && placed.getCellIndex() == 8)
+			{
+				below = placed;
+			}
+		}
+		assertTrue(helm != null && beside != null && below != null);
+		assertEquals(helm.getY(), beside.getY());
+		assertEquals(helm.getX() + BankLayoutPlanner.COLUMN_STRIDE, beside.getX());
+		assertEquals(helm.getX(), below.getX());
+		assertEquals(helm.getY() + BankLayoutPlanner.ROW_STRIDE, below.getY());
+
+		int besideColumn = SectionLayout.columnAt(beside.getX() + 10, BankLayoutPlanner.START_X, BankLayoutPlanner.COLUMN_STRIDE, 8);
+		int besideRow = SectionLayout.rowAt(beside.getY() + 30, helm.getY(), BankLayoutPlanner.ROW_STRIDE, 2);
+		assertEquals(1, besideColumn);
+		assertEquals(0, besideRow);
+		int[] besideHit = SectionLayout.hitTest(dragging.getPlaced(), beside.getX() + 10, beside.getY() + 30);
+		assertEquals(1, besideHit[2]);
+
+		int belowColumn = SectionLayout.columnAt(below.getX() + 4, BankLayoutPlanner.START_X, BankLayoutPlanner.COLUMN_STRIDE, 8);
+		int belowRow = SectionLayout.rowAt(below.getY() + 4, helm.getY(), BankLayoutPlanner.ROW_STRIDE, 2);
+		assertEquals(0, belowColumn);
+		assertEquals(1, belowRow);
+		int[] belowHit = SectionLayout.hitTest(dragging.getPlaced(), below.getX() + 4, below.getY() + 4);
+		assertEquals(8, belowHit[2]);
+
+		List<SectionLayout.Section> besideSaved = SectionLayout.placeItemOnGrid(sections, 2, -1, -1, BODY, 2, 0, besideHit[2], 8);
+		assertEquals(2, besideSaved.get(0).getColumns());
+		assertEquals(Integer.valueOf(HELM), besideSaved.get(0).getCells().get(0));
+		assertEquals(Integer.valueOf(BODY), besideSaved.get(0).getCells().get(1));
+
+		List<SectionLayout.Section> belowSaved = SectionLayout.placeItemOnGrid(sections, 2, -1, -1, BODY, 2, 0, belowHit[2], 8);
+		assertEquals(Integer.valueOf(HELM), belowSaved.get(0).getCells().get(0));
+		assertEquals(Integer.valueOf(BODY), belowSaved.get(0).getCells().get(1));
+		assertTrue(belowSaved.get(0).getCells().size() > 1);
+		assertEquals(1, belowSaved.get(0).getColumns());
+	}
+
+	@Test
+	public void spareCellBesideAnUnsectionedItemDoesNotJoinTheSectionBelow()
+	{
+		List<SectionLayout.BankItem> items = Arrays.asList(
+			new SectionLayout.BankItem(0, 995),
+			new SectionLayout.BankItem(1, HELM));
+		List<SectionLayout.Section> sections = Collections.singletonList(
+			new SectionLayout.Section(1, 1, "Melee", SectionLayout.cells(HELM)));
+		SectionLayout.BankView dragging = SectionLayout.layoutTab(items, 1, sections, SectionLayout.spec(8, 24), true);
+		SectionLayout.Placed coin = placed(dragging, 0);
+		int[] beside = SectionLayout.hitTest(dragging.getPlaced(), coin.getX() + BankLayoutPlanner.COLUMN_STRIDE + 8, coin.getY() + 8);
+		assertEquals(-1, beside[1]);
+		int[] below = SectionLayout.hitTest(dragging.getPlaced(), coin.getX() + 8, coin.getY() + BankLayoutPlanner.ROW_STRIDE + 4);
+		assertTrue(below == null || below[1] < 0);
+	}
+
 	private static SectionLayout.Slot findCell(SectionLayout.Arrangement arranged, int cellIndex)
 	{
 		for (SectionLayout.Slot slot : arranged.getCells())

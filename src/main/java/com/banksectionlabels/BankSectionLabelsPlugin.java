@@ -25,6 +25,7 @@
 package com.banksectionlabels;
 
 import com.google.inject.Provides;
+import java.awt.Color;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -32,6 +33,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import javax.inject.Inject;
+import javax.swing.SwingUtilities;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.ItemComposition;
@@ -41,6 +43,7 @@ import net.runelite.api.ScriptEvent;
 import net.runelite.api.ScriptID;
 import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.MenuEntryAdded;
+import net.runelite.api.events.MenuOpened;
 import net.runelite.api.events.ScriptPostFired;
 import net.runelite.api.events.WidgetClosed;
 import net.runelite.api.gameval.InterfaceID;
@@ -65,6 +68,8 @@ import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.plugins.bank.BankSearch;
 import net.runelite.client.plugins.banktags.BankTagsPlugin;
 import net.runelite.client.plugins.banktags.BankTagsService;
+import net.runelite.client.ui.components.colorpicker.ColorPickerManager;
+import net.runelite.client.ui.components.colorpicker.RuneliteColorPicker;
 import net.runelite.client.ui.overlay.OverlayManager;
 
 /**
@@ -102,7 +107,6 @@ public class BankSectionLabelsPlugin extends Plugin
 	private static final String EXAMINE = "Examine";
 	private static final String VIEW_TAB = "View tab";
 	private static final String PROXY_NAME = "bsl-cell";
-	private static final String HEADING_NAME = "bsl-heading";
 	/** Bank tab buttons are children 10–19 of the tab container (0 = all items). */
 	private static final int TAB_CHILD_START = 10;
 
@@ -136,6 +140,9 @@ public class BankSectionLabelsPlugin extends Plugin
 	@Inject
 	private OverlayManager overlayManager;
 
+	@Inject
+	private ColorPickerManager colorPickerManager;
+
 	private int layoutGeneration;
 	private int layoutColumns = 8;
 	private long handledDropNanos;
@@ -144,8 +151,11 @@ public class BankSectionLabelsPlugin extends Plugin
 	private final Map<Integer, int[]> cellByBankIndex = new HashMap<>();
 	private final List<SectionLayout.Placed> hitSlots = new ArrayList<>();
 	private final List<SectionLayout.TabSpan> tabSpans = new ArrayList<>();
+	private final List<HeadingHits.Target> headingTargets = new ArrayList<>();
 	private List<SectionLayout.Section> prepared = new ArrayList<>();
 	private boolean dragHoles;
+	/** Column count used to number spare cells. 0 means the section's own width. */
+	private int placedGridColumns;
 
 	@Override
 	protected void startUp()
@@ -419,6 +429,7 @@ public class BankSectionLabelsPlugin extends Plugin
 		}
 
 		SectionLayout.BankView view;
+		placedGridColumns = dragHoles ? layoutColumns : 0;
 		if (tab == 0)
 		{
 			view = SectionLayout.layoutAll(bankItems, readTabCounts(), normalized(all), spec, config.showTabTitles(), config.showEmptyCellsAllItems(), dragHoles && config.showEmptyCellsAllItems());
@@ -510,20 +521,21 @@ public class BankSectionLabelsPlugin extends Plugin
 		}
 
 		int headingWidth = layoutColumns * BankLayoutPlanner.COLUMN_STRIDE;
+		headingTargets.clear();
 		List<BankSectionLabelsOverlay.SectionDraw> drawn = new ArrayList<>();
 		if (config.showTabTitles())
 		{
 			for (SectionLayout.TabHeading heading : view.getTabHeadings())
 			{
-				final int titledTab = heading.getTab();
-				String title = TabTitles.resolve(configManager, titledTab);
+				String title = TabTitles.resolve(configManager, heading.getTab());
 				drawn.add(new BankSectionLabelsOverlay.SectionDraw(
 					heading.getY(),
 					heading.getHeight(),
 					heading.getX(),
 					title,
-					true));
-				createHeadingWidget(container, heading.getX(), heading.getY(), headingWidth, heading.getHeight(), RENAME_TAB, () -> promptTabTitle(titledTab));
+					true,
+					HeadingColors.resolveTab(configManager, heading.getTab(), config.tabTitleColor())));
+				headingTargets.add(new HeadingHits.Target(heading.getX(), heading.getY(), headingWidth, heading.getHeight(), true, heading.getTab(), -1, title));
 			}
 		}
 		for (SectionLayout.Header header : view.getHeaders())
@@ -532,10 +544,14 @@ public class BankSectionLabelsPlugin extends Plugin
 			{
 				continue;
 			}
-			final int sectionTab = header.getTab();
-			final int sectionIndex = header.getSectionIndex();
-			drawn.add(new BankSectionLabelsOverlay.SectionDraw(header.getY(), header.getHeight(), header.getX(), header.getName(), false));
-			createHeadingWidget(container, header.getX(), header.getY(), headingWidth, header.getHeight(), EDIT_LABEL, () -> promptSectionName(sectionTab, sectionIndex));
+			drawn.add(new BankSectionLabelsOverlay.SectionDraw(
+				header.getY(),
+				header.getHeight(),
+				header.getX(),
+				header.getName(),
+				false,
+				HeadingColors.resolveSection(configManager, header.getTab(), header.getName(), config.labelColor())));
+			headingTargets.add(new HeadingHits.Target(header.getX(), header.getY(), headingWidth, header.getHeight(), false, header.getTab(), header.getSectionIndex(), header.getName()));
 		}
 		overlay.setSections(drawn);
 		log.debug("Placed {} heading(s) on bank tab {}", drawn.size(), tab);
@@ -601,6 +617,153 @@ public class BankSectionLabelsPlugin extends Plugin
 		catch (RuntimeException ex)
 		{
 			log.debug("Could not update the bank scrollbar", ex);
+		}
+	}
+
+	@Subscribe
+	public void onMenuOpened(MenuOpened event)
+	{
+		if (client == null || config == null || !config.enabled() || isPotionStorage() || headingTargets.isEmpty())
+		{
+			return;
+		}
+		HeadingHits.Target heading = headingUnderMouse();
+		if (heading == null)
+		{
+			return;
+		}
+		String target = heading.getText();
+		if (heading.isTabTitle())
+		{
+			final int tab = heading.getTab();
+			addMenuEntry(RENAME_TAB, target, () -> promptTabTitle(tab));
+			if (client.isKeyPressed(KeyCode.KC_SHIFT))
+			{
+				addColorMenu(heading);
+			}
+			return;
+		}
+		final int tab = heading.getTab();
+		final int sectionIndex = heading.getSectionIndex();
+		addMenuEntry(COMPACT_SECTION, target, () ->
+		{
+			saveOneTab(tab, SectionLayout.compactSection(SectionLayout.forTab(prepared, tab), sectionIndex));
+			relayout();
+		});
+		addMenuEntry(EDIT_LABEL, target, () -> promptSectionName(tab, sectionIndex));
+		if (client.isKeyPressed(KeyCode.KC_SHIFT))
+		{
+			addColorMenu(heading);
+		}
+	}
+
+	private void addColorMenu(HeadingHits.Target heading)
+	{
+		if (client.getMenu() == null || heading == null)
+		{
+			return;
+		}
+		addMenuEntry("Change color", heading.getText(), () -> openColorPicker(heading));
+		addMenuEntry("Reset color", heading.getText(), () -> saveHeadingColor(heading, null));
+		net.runelite.api.Menu presets = client.getMenu().createMenuEntry(-1)
+			.setOption("Presets")
+			.setTarget(heading.getText())
+			.setType(MenuAction.RUNELITE)
+			.createSubMenu();
+		if (presets == null)
+		{
+			return;
+		}
+		for (HeadingColors.Swatch swatch : HeadingColors.PALETTE)
+		{
+			presets.createMenuEntry(-1)
+				.setOption(swatch.name)
+				.setType(MenuAction.RUNELITE)
+				.onClick(entry -> saveHeadingColor(heading, swatch.color));
+		}
+	}
+
+	private void openColorPicker(HeadingHits.Target heading)
+	{
+		if (heading == null || colorPickerManager == null || client == null)
+		{
+			return;
+		}
+		Color current = heading.isTabTitle()
+			? HeadingColors.resolveTab(configManager, heading.getTab(), config.tabTitleColor())
+			: HeadingColors.resolveSection(configManager, heading.getTab(), heading.getText(), config.labelColor());
+		String title = heading.isTabTitle() ? "Tab title color" : "Section heading color";
+		SwingUtilities.invokeLater(() ->
+		{
+			try
+			{
+				RuneliteColorPicker picker = colorPickerManager.create(client, current == null ? Color.WHITE : current, title, false);
+				java.awt.Canvas canvas = client.getCanvas();
+				if (canvas != null)
+				{
+					picker.setLocationRelativeTo(canvas);
+				}
+				picker.setOnColorChange(color ->
+				{
+					if (clientThread != null && color != null)
+					{
+						clientThread.invoke(() -> saveHeadingColor(heading, color));
+					}
+				});
+				picker.setOnClose(color ->
+				{
+					if (clientThread != null && color != null)
+					{
+						clientThread.invoke(() -> saveHeadingColor(heading, color));
+					}
+				});
+				picker.setVisible(true);
+			}
+			catch (RuntimeException ex)
+			{
+				log.warn("Could not open the color picker", ex);
+			}
+		});
+	}
+
+	private void saveHeadingColor(HeadingHits.Target heading, Color color)
+	{
+		try
+		{
+			if (heading.isTabTitle())
+			{
+				HeadingColors.saveTab(configManager, heading.getTab(), color);
+			}
+			else
+			{
+				HeadingColors.saveSection(configManager, heading.getTab(), heading.getText(), color);
+			}
+			relayout();
+		}
+		catch (RuntimeException ex)
+		{
+			log.warn("Could not save heading color", ex);
+		}
+	}
+
+	private HeadingHits.Target headingUnderMouse()
+	{
+		try
+		{
+			Widget container = client.getWidget(InterfaceID.Bankmain.ITEMS);
+			net.runelite.api.Point mouse = client.getMouseCanvasPosition();
+			net.runelite.api.Point origin = container == null ? null : container.getCanvasLocation();
+			if (container == null || container.isHidden() || mouse == null || origin == null)
+			{
+				return null;
+			}
+			int x = SectionLayout.contentX(mouse.getX(), origin.getX());
+			int y = SectionLayout.contentY(mouse.getY(), origin.getY(), container.getScrollY());
+			return HeadingHits.find(headingTargets, x, y);
+		}
+		catch (RuntimeException ex)
+		{
+			return null;
 		}
 	}
 
@@ -690,12 +853,15 @@ public class BankSectionLabelsPlugin extends Plugin
 			List<SectionLayout.Section> all = SectionLayout.prepare(loadSections());
 			List<SectionLayout.Section> tabSections = SectionLayout.forTab(all, tab);
 			String text = SectionLabels.sanitize(value);
+			String previous = sectionIndex >= 0 && sectionIndex < tabSections.size() ? tabSections.get(sectionIndex).getName() : "";
 			if (text.isEmpty())
 			{
+				HeadingColors.saveSection(configManager, tab, previous, null);
 				tabSections = SectionLayout.removeSection(tabSections, sectionIndex);
 			}
 			else
 			{
+				HeadingColors.renameSection(configManager, tab, previous, text);
 				tabSections = SectionLayout.rename(tabSections, sectionIndex, text);
 			}
 			prepared = SectionLayout.replaceTab(all, tab, tabSections);
@@ -725,34 +891,6 @@ public class BankSectionLabelsPlugin extends Plugin
 			return null;
 		}
 		return button;
-	}
-
-	private void createHeadingWidget(Widget container, int x, int y, int width, int height, String action, Runnable onClick)
-	{
-		if (container == null || onClick == null || width <= 0 || height <= 0)
-		{
-			return;
-		}
-		Widget heading = container.createChild(-1, WidgetType.RECTANGLE);
-		if (heading == null)
-		{
-			return;
-		}
-		heading.setName(HEADING_NAME);
-		heading.setOriginalX(x);
-		heading.setOriginalY(y);
-		heading.setOriginalWidth(width);
-		heading.setOriginalHeight(Math.max(1, height - 2));
-		heading.setOpacity(255);
-		heading.setFilled(false);
-		heading.setHidden(false);
-		heading.setHasListener(true);
-		heading.setNoClickThrough(true);
-		heading.setNoScrollThrough(false);
-		heading.setAction(0, action);
-		heading.setOnOpListener((JavaScriptCallback) ev -> onClick.run());
-		heading.revalidate();
-		proxies.add(heading);
 	}
 
 	private static boolean isOurWidget(Widget widget)
@@ -901,7 +1039,9 @@ public class BankSectionLabelsPlugin extends Plugin
 				client.setDraggedOnWidget(null);
 			}
 
-			prepared = SectionLayout.placeItem(prepared, sourceTab, sourceSection, sourceIndex, sourceItem, destTab, destination[1], destination[2]);
+			prepared = placedGridColumns > 0
+				? SectionLayout.placeItemOnGrid(prepared, sourceTab, sourceSection, sourceIndex, sourceItem, destTab, destination[1], destination[2], placedGridColumns)
+				: SectionLayout.placeItem(prepared, sourceTab, sourceSection, sourceIndex, sourceItem, destTab, destination[1], destination[2]);
 			saveSections(prepared);
 			if (!moveTab)
 			{
@@ -1201,6 +1341,7 @@ public class BankSectionLabelsPlugin extends Plugin
 		cellByBankIndex.clear();
 		hitSlots.clear();
 		tabSpans.clear();
+		headingTargets.clear();
 		if (overlay != null)
 		{
 			overlay.setSections(Collections.emptyList());

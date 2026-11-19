@@ -462,6 +462,10 @@ public final class SectionLayout
 		{
 			y += spec.rowStride;
 		}
+		if (extraDropRow)
+		{
+			y = addLooseDropCells(loose, looseCount, columns, spec, y);
+		}
 
 		if (sections != null)
 		{
@@ -474,18 +478,22 @@ public final class SectionLayout
 					cols = spec.columns;
 				}
 				int stored = section.cells.size();
-				int occupiedRows = stored <= 0 ? 0 : (stored + cols - 1) / cols;
-				// The spare row is a drop target only, and only while the caller asks for it.
+				int storedCols = cols;
+				int displayCols = extraDropRow ? Math.max(storedCols, columns) : storedCols;
+				int occupiedRows = stored <= 0 ? 0 : (stored + storedCols - 1) / storedCols;
+				// While dragging, each row runs out to the bank width and one spare row is added.
 				int rows = occupiedRows + (extraDropRow ? 1 : 0);
 				int headerY = y;
 				headers.add(new Header(section.tab, s, section.name, spec.startX, headerY, spec.headerHeight));
 				int itemY = headerY + spec.headerHeight;
 				for (int row = 0; row < rows; row++)
 				{
-					for (int column = 0; column < cols; column++)
+					for (int column = 0; column < displayCols; column++)
 					{
-						int cellIndex = row * cols + column;
-						int itemId = cellIndex < stored ? section.cells.get(cellIndex) : EMPTY;
+						int storedIndex = row * storedCols + column;
+						int itemId = row < occupiedRows && column < storedCols && storedIndex < stored
+							? section.cells.get(storedIndex) : EMPTY;
+						int cellIndex = row * displayCols + column;
 						int cellY = itemY + row * spec.rowStride;
 						cells.add(new Slot(s, cellIndex, itemId, spec.startX + column * spec.columnStride, cellY, itemId == EMPTY));
 					}
@@ -501,6 +509,69 @@ public final class SectionLayout
 			bottom = Math.max(bottom, last.y + spec.rowStride);
 		}
 		return new Arrangement(loose, cells, headers, bottom);
+	}
+
+	/**
+	 * Column under a content X. Truncates into the cell; it does not round into the next column.
+	 * Returns -1 when the point is outside the grid.
+	 */
+	public static int columnAt(int contentX, int startX, int stride, int columns)
+	{
+		if (stride <= 0 || columns <= 0 || contentX < startX)
+		{
+			return -1;
+		}
+		int column = (contentX - startX) / stride;
+		if (column < 0 || column >= columns)
+		{
+			return -1;
+		}
+		return column;
+	}
+
+	/**
+	 * Row under a content Y measured from the top of the first item row.
+	 * Truncates into the cell; a point in the 4px gap under an icon stays on that row.
+	 */
+	public static int rowAt(int contentY, int rowTop, int stride, int rows)
+	{
+		if (stride <= 0 || rows <= 0 || contentY < rowTop)
+		{
+			return -1;
+		}
+		int row = (contentY - rowTop) / stride;
+		if (row < 0 || row >= rows)
+		{
+			return -1;
+		}
+		return row;
+	}
+
+	private static int addLooseDropCells(List<Slot> loose, int looseCount, int columns, Spec spec, int y)
+	{
+		int cols = Math.max(1, columns);
+		if (looseCount <= 0)
+		{
+			for (int column = 0; column < cols; column++)
+			{
+				loose.add(new Slot(-1, -1, EMPTY, spec.startX + column * spec.columnStride, y, true));
+			}
+			return y + spec.rowStride;
+		}
+		int remainder = looseCount % cols;
+		if (remainder != 0)
+		{
+			int rowY = y - spec.rowStride;
+			for (int column = remainder; column < cols; column++)
+			{
+				loose.add(new Slot(-1, -1, EMPTY, spec.startX + column * spec.columnStride, rowY, true));
+			}
+		}
+		for (int column = 0; column < cols; column++)
+		{
+			loose.add(new Slot(-1, -1, EMPTY, spec.startX + column * spec.columnStride, y, true));
+		}
+		return y + spec.rowStride;
 	}
 
 	public static String encode(List<Section> sections)
@@ -1069,19 +1140,28 @@ public final class SectionLayout
 		{
 			return null;
 		}
+		int[] looseHit = null;
 		for (Placed slot : slots)
 		{
-			if (slot == null || !slot.inSection())
+			if (slot == null)
 			{
 				continue;
 			}
-			if (contentX >= slot.x && contentX < slot.x + BankLayoutPlanner.COLUMN_STRIDE
-				&& contentY >= slot.y && contentY < slot.y + BankLayoutPlanner.ROW_STRIDE)
+			if (contentX < slot.x || contentX >= slot.x + BankLayoutPlanner.COLUMN_STRIDE
+				|| contentY < slot.y || contentY >= slot.y + BankLayoutPlanner.ROW_STRIDE)
+			{
+				continue;
+			}
+			if (slot.inSection())
 			{
 				return new int[]{slot.tab, slot.sectionIndex, slot.cellIndex};
 			}
+			if (slot.isEmpty())
+			{
+				looseHit = new int[]{slot.tab, -1, -1};
+			}
 		}
-		return null;
+		return looseHit;
 	}
 
 	/**
@@ -1135,6 +1215,153 @@ public final class SectionLayout
 		return replaceTab(next, destTab, dest);
 	}
 
+	/**
+	 * Place onto a cell addressed in {@code gridColumns}-wide rows, the width
+	 * used while spare cells are showing. A column past the stored width widens
+	 * that row instead of wrapping onto the next one.
+	 */
+	public static List<Section> placeItemOnGrid(List<Section> all, int sourceTab, int sourceSection, int sourceCell, int itemId, int destTab, int destSection, int destCell, int gridColumns)
+	{
+		if (gridColumns <= 0)
+		{
+			return placeItem(all, sourceTab, sourceSection, sourceCell, itemId, destTab, destSection, destCell);
+		}
+		List<Section> next = all == null ? new ArrayList<Section>() : all;
+		int fromSection = sourceSection;
+		int fromCell = sourceCell;
+		if (sourceTab != destTab)
+		{
+			if (sourceSection >= 0)
+			{
+				next = replaceTab(next, sourceTab, clearOnGrid(forTab(next, sourceTab), sourceSection, sourceCell, gridColumns));
+			}
+			fromSection = -1;
+			fromCell = -1;
+		}
+		List<Section> dest = dropOnGrid(forTab(next, destTab), fromSection, fromCell, itemId, destSection, destCell, gridColumns);
+		return replaceTab(next, destTab, dest);
+	}
+
+	public static List<Section> dropOnGrid(List<Section> existing, int sourceSection, int sourceCell, int sourceItemId, int targetSection, int targetCell, int gridColumns)
+	{
+		List<Section> copy = copyOf(existing);
+		if (targetSection < 0 || targetSection >= copy.size() || targetCell < 0 || sourceItemId < 0 || gridColumns <= 0)
+		{
+			return copy;
+		}
+		if (sourceSection == targetSection && sourceCell == targetCell)
+		{
+			return copy;
+		}
+		if (sourceSection >= 0 && sourceSection != targetSection)
+		{
+			clearOnGrid(copy, sourceSection, sourceCell, gridColumns);
+		}
+		Section target = copy.get(targetSection);
+		int grid = gridColumns;
+		int row = targetCell / grid;
+		int column = targetCell % grid;
+		int oldCols = Math.max(1, target.columns);
+		int oldRows = target.cells.isEmpty() ? 0 : (target.cells.size() + oldCols - 1) / oldCols;
+		int newCols = Math.max(oldCols, column + 1);
+		int newRows = Math.max(oldRows, row + 1);
+		int[][] painted = new int[newRows][newCols];
+		for (int r = 0; r < newRows; r++)
+		{
+			Arrays.fill(painted[r], EMPTY);
+		}
+		for (int i = 0; i < target.cells.size(); i++)
+		{
+			int r = i / oldCols;
+			int c = i % oldCols;
+			if (r < newRows && c < newCols)
+			{
+				painted[r][c] = target.cells.get(i);
+			}
+		}
+		if (sourceSection == targetSection && sourceCell >= 0)
+		{
+			int sourceRow = sourceCell / grid;
+			int sourceColumn = sourceCell % grid;
+			if (sourceRow >= 0 && sourceRow < newRows && sourceColumn >= 0 && sourceColumn < newCols)
+			{
+				painted[sourceRow][sourceColumn] = EMPTY;
+			}
+		}
+		boolean ontoHead = row == 0 && column == 0 && painted[0][0] != EMPTY && sourceSection != targetSection;
+		if (ontoHead)
+		{
+			int[] empty = firstEmptyGrid(painted);
+			if (empty == null)
+			{
+				int[][] grown = new int[newRows + 1][newCols];
+				for (int r = 0; r < newRows; r++)
+				{
+					grown[r] = painted[r];
+				}
+				Arrays.fill(grown[newRows], EMPTY);
+				painted = grown;
+				empty = new int[]{newRows, 0};
+			}
+			painted[empty[0]][empty[1]] = sourceItemId;
+		}
+		else
+		{
+			painted[row][column] = sourceItemId;
+		}
+		copy.set(targetSection, sectionFromGrid(target, painted));
+		return tidyAll(copy);
+	}
+
+	private static List<Section> clearOnGrid(List<Section> sections, int sectionIndex, int cellIndex, int gridColumns)
+	{
+		List<Section> copy = copyOf(sections);
+		if (sectionIndex < 0 || sectionIndex >= copy.size() || cellIndex < 0 || gridColumns <= 0)
+		{
+			return copy;
+		}
+		Section section = copy.get(sectionIndex);
+		int oldCols = Math.max(1, section.columns);
+		int row = cellIndex / gridColumns;
+		int column = cellIndex % gridColumns;
+		int stored = row * oldCols + column;
+		if (column < oldCols && stored >= 0 && stored < section.cells.size())
+		{
+			section.cells.set(stored, EMPTY);
+		}
+		copy.set(sectionIndex, tidy(section));
+		return copy;
+	}
+
+	private static int[] firstEmptyGrid(int[][] painted)
+	{
+		for (int r = 0; r < painted.length; r++)
+		{
+			for (int c = 0; c < painted[r].length; c++)
+			{
+				if (painted[r][c] == EMPTY)
+				{
+					return new int[]{r, c};
+				}
+			}
+		}
+		return null;
+	}
+
+	private static Section sectionFromGrid(Section template, int[][] painted)
+	{
+		int cols = painted.length == 0 ? 1 : painted[0].length;
+		List<Integer> cells = new ArrayList<>();
+		for (int[] row : painted)
+		{
+			for (int id : row)
+			{
+				cells.add(id);
+			}
+		}
+		return new Section(template.tab, Math.max(1, cols), template.name, cells);
+	}
+
 	private static BankView layoutBlock(List<BankItem> block, int tab, List<Section> sections, Spec spec, int startY, boolean packed, boolean dragging)
 	{
 		boolean[] used = new boolean[block.size()];
@@ -1177,17 +1404,30 @@ public final class SectionLayout
 		List<Placed> placed = new ArrayList<>();
 		int looseOrdinal = 0;
 		int y = startY;
+		List<Slot> realLoose = new ArrayList<>();
+		for (Slot slot : arranged.looseSlots)
+		{
+			if (slot.empty)
+			{
+				placed.add(new Placed(-1, tab, -1, -1, slot.x, slot.y, true));
+				y = Math.max(y, slot.y + spec.rowStride);
+			}
+			else
+			{
+				realLoose.add(slot);
+			}
+		}
 		for (int i = 0; i < block.size(); i++)
 		{
 			if (used[i])
 			{
 				continue;
 			}
-			if (looseOrdinal >= arranged.looseSlots.size())
+			if (looseOrdinal >= realLoose.size())
 			{
 				break;
 			}
-			Slot slot = arranged.looseSlots.get(looseOrdinal++);
+			Slot slot = realLoose.get(looseOrdinal++);
 			placed.add(new Placed(block.get(i).bankIndex, tab, -1, -1, slot.x, slot.y, false));
 			y = Math.max(y, slot.y + spec.rowStride);
 		}

@@ -21,7 +21,7 @@ The grid is saved per account. It does not depend on the order of items in the r
 - A section belongs to the vanilla tab the item is in. Building it on tab 2 and editing it from the all-items view changes the same section.
 - On the all-items view, untabbed items stay at the top. Each numbered tab then gets a bold yellow-orange title, then that tab's loose items, then its smaller orange section labels and grids.
 - The title is the name you set with **Rename tab title** (right-click the tab button, the title itself, or an item in that tab). If you have not set one, it uses Bank Tab Names, then `Tab N`. Leave the box empty to clear your name. **Show tab titles** turns the titles off.
-- Right-click a section heading for **Edit section label**.
+- Right-click a section heading for **Edit section label**. Shift-right-click a tab title or a section heading and choose **Change color** to open RuneLite’s color wheel, or **Reset color** to use the default again. The heading is only painted text, so the scroll wheel still moves the bank when the cursor is on it.
 - In a numbered tab, holes between items stay. Empty space after the last item, and the spare row under a section, appear only while you are dragging. After you let go, unused holes are removed and the row shrinks back.
 - The all-items view packs each section: each brother still has his own row, but holes are not drawn. Turn on **Show empty cells in all-items view** to see them there too.
 - A newly deposited item, or one dropped on a tab button or under a tab title without hitting a section cell, sits in that tab's unsectioned area above the sections. It joins a section only when you drop it on a section cell or give it a label.
@@ -38,7 +38,9 @@ Labels are saved per account with RuneLite’s profile config, so they come back
 | --- | --- |
 | Show section labels | Turn the headings and the extra space on or off |
 | Require Shift for label menu | Hide the add/edit/remove options unless Shift is held |
-| Label color | Text and divider color. Alpha is supported |
+| Tab title color | Default color of the numbered-tab titles |
+| Section heading color | Default color of section headings |
+| Divider line color | Color of the thin line under headings |
 | Font | Any RuneLite font, including the RuneScape fonts |
 | Divider line | A thin line under the heading. Off leaves text only |
 | Header height | How many pixels of space are inserted above the labeled row |

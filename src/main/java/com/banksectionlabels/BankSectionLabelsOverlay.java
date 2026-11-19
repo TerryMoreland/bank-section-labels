@@ -172,12 +172,11 @@ class BankSectionLabelsOverlay extends Overlay
 		int gap = section.height > 0 ? section.height : header;
 		int band = Math.max(1, gap - 2);
 		Font useFont = baseFont;
-		Color useColor = color;
+		Color useColor = section.color != null ? section.color : color;
 		if (section.tabTitle)
 		{
 			float size = Math.min(20f, baseFont.getSize2D() + 3f);
 			useFont = baseFont.deriveFont(Font.BOLD, size);
-			useColor = new Color(255, 186, 48);
 		}
 		graphics.setFont(useFont);
 		FontMetrics metrics = graphics.getFontMetrics();
@@ -203,7 +202,8 @@ class BankSectionLabelsOverlay extends Overlay
 		if (config.divider())
 		{
 			int lineY = top + band - 1;
-			Color line = section.tabTitle ? new Color(255, 186, 48, 170) : new Color(useColor.getRed(), useColor.getGreen(), useColor.getBlue(), 150);
+			Color chosen = config.dividerColor();
+			Color line = new Color(chosen.getRed(), chosen.getGreen(), chosen.getBlue(), Math.min(255, chosen.getAlpha()));
 			graphics.setColor(line);
 			graphics.drawLine(itemArea.x, lineY, itemArea.x + itemArea.width - 1, lineY);
 		}
@@ -216,14 +216,16 @@ class BankSectionLabelsOverlay extends Overlay
 		final int textX;
 		final String text;
 		final boolean tabTitle;
+		final Color color;
 
-		SectionDraw(int containerY, int height, int textX, String text, boolean tabTitle)
+		SectionDraw(int containerY, int height, int textX, String text, boolean tabTitle, Color color)
 		{
 			this.containerY = containerY;
 			this.height = height;
 			this.textX = textX;
 			this.text = text;
 			this.tabTitle = tabTitle;
+			this.color = color;
 		}
 	}
 }

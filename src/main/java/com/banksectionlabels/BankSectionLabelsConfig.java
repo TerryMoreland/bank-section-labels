@@ -60,21 +60,45 @@ public interface BankSectionLabelsConfig extends Config
 
 	@Alpha
 	@ConfigItem(
-		keyName = "labelColor",
-		name = "Label color",
-		description = "Color of the heading text and the optional divider line",
+		keyName = "tabTitleColor",
+		name = "Tab title color",
+		description = "Default color of numbered-tab titles. A color set on one title overrides this",
 		position = 2
+	)
+	default Color tabTitleColor()
+	{
+		return new Color(255, 186, 48);
+	}
+
+	@Alpha
+	@ConfigItem(
+		keyName = "labelColor",
+		name = "Section heading color",
+		description = "Default color of section headings. A color set on one heading overrides this",
+		position = 3
 	)
 	default Color labelColor()
 	{
 		return new Color(0xFF, 0x90, 0x40);
 	}
 
+	@Alpha
+	@ConfigItem(
+		keyName = "dividerColor",
+		name = "Divider line color",
+		description = "Color of the thin line under headings",
+		position = 4
+	)
+	default Color dividerColor()
+	{
+		return new Color(255, 186, 48);
+	}
+
 	@ConfigItem(
 		keyName = "font",
 		name = "Font",
 		description = "RuneLite font used for headings. Raise the header height if the text is clipped",
-		position = 3
+		position = 5
 	)
 	default FontType font()
 	{
@@ -85,7 +109,7 @@ public interface BankSectionLabelsConfig extends Config
 		keyName = "divider",
 		name = "Divider line",
 		description = "Draw a thin line under each heading. There is no filled bar unless Header background is on",
-		position = 4
+		position = 6
 	)
 	default boolean divider()
 	{
