@@ -82,8 +82,8 @@ import net.runelite.client.ui.overlay.OverlayManager;
 @Slf4j
 @PluginDescriptor(
 	name = "Bank Section Labels",
-	description = "Draw your own headings above rows of items in regular bank tabs",
-	tags = {"bank", "labels", "sections", "headers"}
+	description = "Headings and your own grid inside regular bank tabs",
+	tags = {"bank", "layout", "labels", "headers", "organize"}
 )
 @PluginDependency(BankTagsPlugin.class)
 public class BankSectionLabelsPlugin extends Plugin
@@ -168,10 +168,10 @@ public class BankSectionLabelsPlugin extends Plugin
 	@Override
 	protected void shutDown()
 	{
-		overlay.setSections(Collections.emptyList());
+		clearLayoutVisuals();
 		overlayManager.remove(overlay);
 		log.info("Bank Section Labels stopped");
-		// This plugin is already unregistered, so the rebuild restores vanilla positions.
+		// Unregistered, so the rebuild paints the vanilla bank again.
 		relayout();
 	}
 
