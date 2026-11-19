@@ -223,9 +223,15 @@ public class BankSectionLabelsPlugin extends Plugin
 			relayout();
 			return;
 		}
-		if (!dragging && (dragHoles || snapAfterDrag))
+		if (!dragging && dragHoles)
 		{
+			// Leave the drag geometry in place until the drop listener has read it.
 			dragHoles = false;
+			snapAfterDrag = true;
+			return;
+		}
+		if (!dragging && snapAfterDrag)
+		{
 			snapAfterDrag = false;
 			snapOpenBank();
 		}
@@ -477,7 +483,7 @@ public class BankSectionLabelsPlugin extends Plugin
 			armDrag(widget);
 			if (placed.inSection())
 			{
-				cellByBankIndex.put(widget.getIndex(), new int[]{placed.getTab(), placed.getSectionIndex(), placed.getCellIndex()});
+				cellByBankIndex.put(widget.getIndex(), new int[]{placed.getTab(), placed.getSectionIndex(), placed.getCellIndex(), placed.getGridColumns()});
 				hitSlots.add(placed);
 			}
 		}
@@ -1046,8 +1052,9 @@ public class BankSectionLabelsPlugin extends Plugin
 				client.setDraggedOnWidget(null);
 			}
 
-			prepared = placedGridColumns > 0
-				? SectionLayout.placeItemOnGrid(prepared, sourceTab, sourceSection, sourceIndex, sourceItem, destTab, destination[1], destination[2], placedGridColumns)
+			int grid = destination.length > 3 ? destination[3] : placedGridColumns;
+			prepared = grid > 0
+				? SectionLayout.placeItemOnGrid(prepared, sourceTab, sourceSection, sourceIndex, sourceItem, destTab, destination[1], destination[2], grid)
 				: SectionLayout.placeItem(prepared, sourceTab, sourceSection, sourceIndex, sourceItem, destTab, destination[1], destination[2]);
 			saveSections(prepared);
 			if (!moveTab)
@@ -1065,6 +1072,11 @@ public class BankSectionLabelsPlugin extends Plugin
 
 	private int[] destinationCell(Widget target)
 	{
+		int[] underCursor = cellUnderCursor();
+		if (underCursor != null)
+		{
+			return underCursor;
+		}
 		if (target != null)
 		{
 			int[] proxy = proxyCells.get(target);
@@ -1081,6 +1093,11 @@ public class BankSectionLabelsPlugin extends Plugin
 				}
 			}
 		}
+		return null;
+	}
+
+	private int[] cellUnderCursor()
+	{
 		if (client == null || hitSlots.isEmpty())
 		{
 			return null;
@@ -1413,7 +1430,7 @@ public class BankSectionLabelsPlugin extends Plugin
 		proxy.setOnDragCompleteListener((JavaScriptCallback) this::onDragComplete);
 		proxy.revalidate();
 		proxies.add(proxy);
-		proxyCells.put(proxy, new int[]{slot.getTab(), slot.getSectionIndex(), slot.getCellIndex()});
+		proxyCells.put(proxy, new int[]{slot.getTab(), slot.getSectionIndex(), slot.getCellIndex(), slot.getGridColumns()});
 	}
 
 	private void placeWidget(Widget widget, int x, int y)

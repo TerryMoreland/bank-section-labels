@@ -481,8 +481,10 @@ public final class SectionLayout
 				int storedCols = cols;
 				int displayCols = extraDropRow ? Math.max(storedCols, columns) : storedCols;
 				int occupiedRows = stored <= 0 ? 0 : (stored + storedCols - 1) / storedCols;
-				// While dragging, each row runs out to the bank width and one spare row is added.
-				int rows = occupiedRows + (extraDropRow ? 1 : 0);
+				// Widen every existing row while dragging. A spare row is added only
+				// under the last section, so earlier rows do not jump down.
+				boolean lastSection = s == sections.size() - 1;
+				int rows = occupiedRows + (extraDropRow && lastSection ? 1 : 0);
 				int headerY = y;
 				headers.add(new Header(section.tab, s, section.name, spec.startX, headerY, spec.headerHeight));
 				int itemY = headerY + spec.headerHeight;
@@ -832,8 +834,15 @@ public final class SectionLayout
 		private final int x;
 		private final int y;
 		private final boolean empty;
+		/** Width used to turn {@code cellIndex} into a row and column. 0 uses the section's own width. */
+		private final int gridColumns;
 
 		Placed(int bankIndex, int tab, int sectionIndex, int cellIndex, int x, int y, boolean empty)
+		{
+			this(bankIndex, tab, sectionIndex, cellIndex, x, y, empty, 0);
+		}
+
+		Placed(int bankIndex, int tab, int sectionIndex, int cellIndex, int x, int y, boolean empty, int gridColumns)
 		{
 			this.bankIndex = bankIndex;
 			this.tab = tab;
@@ -842,6 +851,7 @@ public final class SectionLayout
 			this.x = x;
 			this.y = y;
 			this.empty = empty;
+			this.gridColumns = Math.max(0, gridColumns);
 		}
 
 		public int getBankIndex()
@@ -877,6 +887,11 @@ public final class SectionLayout
 		public boolean isEmpty()
 		{
 			return empty;
+		}
+
+		public int getGridColumns()
+		{
+			return gridColumns;
 		}
 
 		public boolean inSection()
@@ -1154,7 +1169,7 @@ public final class SectionLayout
 			}
 			if (slot.inSection())
 			{
-				return new int[]{slot.tab, slot.sectionIndex, slot.cellIndex};
+				return new int[]{slot.tab, slot.sectionIndex, slot.cellIndex, slot.gridColumns};
 			}
 			if (slot.isEmpty())
 			{
@@ -1483,33 +1498,52 @@ public final class SectionLayout
 			}
 			return new BankView(placed, headers, Collections.emptyList(), Collections.emptyList(), y, Collections.emptyList());
 		}
+		int gridColumns = dragging ? spec.columns : 0;
 		for (Slot slot : arranged.cells)
 		{
 			if (slot.empty && !keepHole(sections, slot, dragging))
 			{
 				continue;
 			}
+			int storedIndex = storedIndex(sections, slot, gridColumns);
 			if (slot.empty || slot.sectionIndex < 0 || slot.sectionIndex >= cellMatches.size())
 			{
-				placed.add(new Placed(-1, tab, slot.sectionIndex, slot.cellIndex, slot.x, slot.y, true));
+				placed.add(new Placed(-1, tab, slot.sectionIndex, slot.cellIndex, slot.x, slot.y, true, gridColumns));
 				continue;
 			}
 			int[] matches = cellMatches.get(slot.sectionIndex);
-			int item = slot.cellIndex >= 0 && slot.cellIndex < matches.length ? matches[slot.cellIndex] : -1;
+			int item = storedIndex >= 0 && storedIndex < matches.length ? matches[storedIndex] : -1;
 			if (item < 0)
 			{
 				if (!keepHole(sections, slot, dragging))
 				{
 					continue;
 				}
-				placed.add(new Placed(-1, tab, slot.sectionIndex, slot.cellIndex, slot.x, slot.y, true));
+				placed.add(new Placed(-1, tab, slot.sectionIndex, slot.cellIndex, slot.x, slot.y, true, gridColumns));
 			}
 			else
 			{
-				placed.add(new Placed(block.get(item).bankIndex, tab, slot.sectionIndex, slot.cellIndex, slot.x, slot.y, false));
+				placed.add(new Placed(block.get(item).bankIndex, tab, slot.sectionIndex, slot.cellIndex, slot.x, slot.y, false, gridColumns));
 			}
 		}
 		return new BankView(placed, arranged.headers, Collections.emptyList(), Collections.emptyList(), arranged.contentBottom, Collections.emptyList());
+	}
+
+	private static int storedIndex(List<Section> sections, Slot slot, int gridColumns)
+	{
+		if (slot == null || sections == null || slot.sectionIndex < 0 || slot.sectionIndex >= sections.size())
+		{
+			return -1;
+		}
+		int storedCols = Math.max(1, sections.get(slot.sectionIndex).columns);
+		int grid = gridColumns > 0 ? gridColumns : storedCols;
+		int row = slot.cellIndex / grid;
+		int column = slot.cellIndex % grid;
+		if (column >= storedCols)
+		{
+			return -1;
+		}
+		return row * storedCols + column;
 	}
 
 	/** Interior holes stay. Trailing holes and the spare row show only while dragging. */

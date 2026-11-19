@@ -573,6 +573,97 @@ public class SectionLayoutTest
 		assertTrue(view.getHeaders().get(0).getY() > 0);
 	}
 
+	@Test
+	public void releaseRightOfLawRuneStaysOnThatRow()
+	{
+		int earth = 557;
+		int law = 563;
+		int water = 555;
+		int cosmic = 564;
+		List<SectionLayout.Section> sections = Arrays.asList(
+			new SectionLayout.Section(3, 2, "A", SectionLayout.cells(earth, law)),
+			new SectionLayout.Section(3, 2, "B", SectionLayout.cells(water, cosmic))
+		);
+		List<SectionLayout.BankItem> items = Arrays.asList(
+			new SectionLayout.BankItem(0, earth),
+			new SectionLayout.BankItem(1, law),
+			new SectionLayout.BankItem(2, water),
+			new SectionLayout.BankItem(3, cosmic)
+		);
+		SectionLayout.BankView dragging = SectionLayout.layoutTab(items, 3, sections, SectionLayout.spec(8, 24), true);
+		SectionLayout.Placed earthItem = placed(dragging, 0);
+		SectionLayout.Placed beside = null;
+		for (SectionLayout.Placed cell : dragging.getPlaced())
+		{
+			if (cell.getSectionIndex() == 0 && cell.isEmpty()
+				&& cell.getX() == earthItem.getX() + 2 * BankLayoutPlanner.COLUMN_STRIDE
+				&& cell.getY() == earthItem.getY())
+			{
+				beside = cell;
+			}
+		}
+		assertTrue(beside != null);
+		assertEquals(2, beside.getCellIndex());
+		assertEquals(8, beside.getGridColumns());
+		int[] hit = SectionLayout.hitTest(dragging.getPlaced(), beside.getX() + 10, beside.getY() + 10);
+		assertEquals(0, hit[1]);
+		assertEquals(2, hit[2]);
+		assertEquals(8, hit[3]);
+
+		List<SectionLayout.Section> saved = SectionLayout.placeItemOnGrid(sections, 3, 1, 0, water, 3, 0, hit[2], hit[3]);
+		assertEquals(3, saved.get(0).getColumns());
+		assertEquals(Integer.valueOf(earth), saved.get(0).getCells().get(0));
+		assertEquals(Integer.valueOf(law), saved.get(0).getCells().get(1));
+		assertEquals(Integer.valueOf(water), saved.get(0).getCells().get(2));
+		assertEquals(Integer.valueOf(cosmic), saved.get(1).getCells().get(1));
+		assertEquals(2, saved.get(1).getColumns());
+
+		SectionLayout.Section tidied = SectionLayout.tidy(saved.get(0));
+		assertEquals(3, tidied.getColumns());
+		assertEquals(Integer.valueOf(water), tidied.getCells().get(2));
+	}
+
+	@Test
+	public void dropIntoTheSpareRowStartsANewRow()
+	{
+		int earth = 557;
+		int law = 563;
+		int water = 555;
+		List<SectionLayout.Section> sections = Collections.singletonList(
+			new SectionLayout.Section(3, 2, "A", SectionLayout.cells(earth, law)));
+		SectionLayout.BankView dragging = SectionLayout.layoutTab(
+			Arrays.asList(new SectionLayout.BankItem(0, earth), new SectionLayout.BankItem(1, law)),
+			3, sections, SectionLayout.spec(8, 24), true);
+		SectionLayout.Placed earthItem = placed(dragging, 0);
+		int[] hit = SectionLayout.hitTest(dragging.getPlaced(), earthItem.getX() + 4, earthItem.getY() + BankLayoutPlanner.ROW_STRIDE + 4);
+		assertEquals(0, hit[1]);
+		assertEquals(8, hit[2]);
+		List<SectionLayout.Section> saved = SectionLayout.placeItemOnGrid(sections, 3, -1, -1, water, 3, 0, hit[2], hit[3]);
+		assertEquals(Integer.valueOf(earth), saved.get(0).getCells().get(0));
+		assertEquals(Integer.valueOf(law), saved.get(0).getCells().get(1));
+		assertEquals(Integer.valueOf(water), saved.get(0).getCells().get(2));
+		assertEquals(2, saved.get(0).getColumns());
+	}
+
+	@Test
+	public void numberedTabKeepsInteriorGaps()
+	{
+		List<SectionLayout.Section> sections = Collections.singletonList(
+			new SectionLayout.Section(3, 3, "A", SectionLayout.cells(557, SectionLayout.EMPTY, 563)));
+		SectionLayout.BankView view = SectionLayout.layoutTab(
+			Arrays.asList(new SectionLayout.BankItem(0, 557), new SectionLayout.BankItem(1, 563)),
+			3, sections, SectionLayout.spec(8, 24), false);
+		boolean gap = false;
+		for (SectionLayout.Placed cell : view.getPlaced())
+		{
+			if (cell.isEmpty() && cell.getSectionIndex() == 0 && cell.getCellIndex() == 1)
+			{
+				gap = true;
+			}
+		}
+		assertTrue(gap);
+	}
+
 	private static SectionLayout.Slot findCell(SectionLayout.Arrangement arranged, int cellIndex)
 	{
 		for (SectionLayout.Slot slot : arranged.getCells())
