@@ -525,6 +525,54 @@ public class SectionLayoutTest
 		assertTrue(below == null || below[1] < 0);
 	}
 
+	@Test
+	public void sameTabBesideDropPersistsOnEveryNumberedTab()
+	{
+		int astral = 9075;
+		int chaos = 562;
+		for (int tab : new int[]{1, 3, 9})
+		{
+			List<SectionLayout.Section> sections = Collections.singletonList(
+				new SectionLayout.Section(tab, 1, "runes", SectionLayout.cells(astral)));
+			List<SectionLayout.Section> saved = SectionLayout.placeItemOnGrid(sections, tab, -1, -1, chaos, tab, 0, 1, 8);
+			assertEquals(tab, saved.get(0).getTab());
+			assertEquals(Integer.valueOf(astral), saved.get(0).getCells().get(0));
+			assertEquals(Integer.valueOf(chaos), saved.get(0).getCells().get(1));
+			assertEquals(saved.get(0).getCells(), SectionLayout.decode(SectionLayout.encode(saved)).get(0).getCells());
+
+			SectionLayout.BankView view = SectionLayout.layoutTab(
+				Arrays.asList(new SectionLayout.BankItem(0, astral), new SectionLayout.BankItem(1, chaos)),
+				tab,
+				saved,
+				SectionLayout.spec(8, 24));
+			SectionLayout.Placed first = placed(view, 0);
+			SectionLayout.Placed second = placed(view, 1);
+			assertEquals(first.getY(), second.getY());
+			assertEquals(first.getX() + BankLayoutPlanner.COLUMN_STRIDE, second.getX());
+			assertEquals(SectionLayout.TOP_INSET + 24, first.getY());
+		}
+	}
+
+	@Test
+	public void unsectionedItemsPackTogetherWithTheHeadingBelow()
+	{
+		int earth = 557;
+		int air = 556;
+		List<SectionLayout.BankItem> items = Arrays.asList(
+			new SectionLayout.BankItem(0, earth),
+			new SectionLayout.BankItem(1, air),
+			new SectionLayout.BankItem(2, 9075));
+		List<SectionLayout.Section> sections = Collections.singletonList(
+			new SectionLayout.Section(3, 1, "runes", SectionLayout.cells(9075)));
+		SectionLayout.BankView view = SectionLayout.layoutTab(items, 3, sections, SectionLayout.spec(8, 24));
+		SectionLayout.Placed earthRune = placed(view, 0);
+		SectionLayout.Placed airRune = placed(view, 1);
+		assertEquals(earthRune.getY(), airRune.getY());
+		assertEquals(BankLayoutPlanner.COLUMN_STRIDE, airRune.getX() - earthRune.getX());
+		assertTrue(view.getHeaders().get(0).getY() >= earthRune.getY() + BankLayoutPlanner.ROW_STRIDE);
+		assertTrue(view.getHeaders().get(0).getY() > 0);
+	}
+
 	private static SectionLayout.Slot findCell(SectionLayout.Arrangement arranged, int cellIndex)
 	{
 		for (SectionLayout.Slot slot : arranged.getCells())

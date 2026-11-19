@@ -154,6 +154,8 @@ public class BankSectionLabelsPlugin extends Plugin
 	private final List<HeadingHits.Target> headingTargets = new ArrayList<>();
 	private List<SectionLayout.Section> prepared = new ArrayList<>();
 	private boolean dragHoles;
+	/** Same-tab drop is recorded immediately and snapped on the following tick. */
+	private boolean snapAfterDrag;
 	/** Column count used to number spare cells. 0 means the section's own width. */
 	private int placedGridColumns;
 
@@ -215,12 +217,18 @@ public class BankSectionLabelsPlugin extends Plugin
 		{
 			dragging = false;
 		}
-		if (dragging == dragHoles)
+		if (dragging && !dragHoles)
 		{
+			dragHoles = true;
+			relayout();
 			return;
 		}
-		dragHoles = dragging;
-		relayout();
+		if (!dragging && (dragHoles || snapAfterDrag))
+		{
+			dragHoles = false;
+			snapAfterDrag = false;
+			snapOpenBank();
+		}
 	}
 
 	@Subscribe
@@ -364,6 +372,8 @@ public class BankSectionLabelsPlugin extends Plugin
 
 	private void applyLayout(Widget container)
 	{
+		// Do not write Bankmain.TITLE or the tab-count varbits. The "(218)" in
+		// the title is the game's own item count.
 		if (container == null)
 		{
 			return;
@@ -1010,10 +1020,7 @@ public class BankSectionLabelsPlugin extends Plugin
 				else
 				{
 					client.setDraggedOnWidget(null);
-					if (sourceSection >= 0)
-					{
-						relayout();
-					}
+					snapAfterDrag = true;
 				}
 				return;
 			}
@@ -1045,7 +1052,9 @@ public class BankSectionLabelsPlugin extends Plugin
 			saveSections(prepared);
 			if (!moveTab)
 			{
-				relayout();
+				// The drag listener returns before the client clears the ghost.
+				// Snap original position and opacity on the next tick.
+				snapAfterDrag = true;
 			}
 		}
 		catch (RuntimeException ex)
@@ -1413,11 +1422,40 @@ public class BankSectionLabelsPlugin extends Plugin
 		{
 			return;
 		}
-		if (widget.getOriginalX() != x || widget.getOriginalY() != y)
+		// Cell coordinates only. Clear the drag ghost so a same-tab drop cannot
+		// stay faded or half a cell off the 48 by 36 pitch.
+		widget.setOriginalX(x);
+		widget.setOriginalY(y);
+		widget.setRelativeX(0);
+		widget.setRelativeY(0);
+		widget.setForcedPosition(x, y);
+		if (widget.getItemQuantity() > 0)
 		{
-			widget.setOriginalX(x);
-			widget.setOriginalY(y);
-			widget.revalidate();
+			widget.setOpacity(0);
+		}
+		widget.revalidate();
+	}
+
+	private void snapOpenBank()
+	{
+		try
+		{
+			if (!layoutAllowed())
+			{
+				return;
+			}
+			Widget container = client.getWidget(InterfaceID.Bankmain.ITEMS);
+			if (container == null || container.isHidden())
+			{
+				return;
+			}
+			int generation = ++layoutGeneration;
+			applyLayout(container);
+			updateScrollbar(generation);
+		}
+		catch (RuntimeException ex)
+		{
+			log.warn("Could not snap the bank grid after a drop", ex);
 		}
 	}
 
