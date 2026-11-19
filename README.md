@@ -83,30 +83,36 @@ Enable **Bank Section Labels** in the plugin list if it is not already on. The p
 
 `./gradlew build` compiles the plugin and runs the unit tests. `./gradlew run` is what opens the client.
 
-## Sideload a jar into an installed client
+## Run the test client without Gradle
 
-Sideloading is only for development. It requires the official client to be started in developer mode, and the jar has to be built against a compatible RuneLite version. Rebuild after the client updates.
-
-```bash
-./gradlew jar
-```
-
-Copy `build/libs/bank-section-labels-1.0.0.jar` into the sideload folder:
-
-- Linux and macOS: `~/.runelite/sideloaded-plugins/`
-- Windows: `%USERPROFILE%\.runelite\sideloaded-plugins\`
-
-Do not copy `bank-section-labels-1.0.0-all.jar`. That fat jar is the dev launcher, not a plugin.
-
-Start RuneLite with developer mode:
+Release RuneLite does not load jars from `sideloaded-plugins`, even with `--developer-mode`. Use the shaded test client instead. It is the example-plugin launcher: `BankSectionLabelsPluginTest` calls `ExternalPluginManager.loadBuiltin` and then `RuneLite.main`. `--developer-mode` and `--debug` are added when you do not pass them.
 
 ```bash
-java -ea -jar RuneLite.jar --developer-mode
+./gradlew shadowJar
+java -ea -jar build/libs/bank-section-labels-1.0.0-all.jar
 ```
 
-The exact jar name of the client depends on how you installed it. In IntelliJ, add the program argument `--developer-mode` and the VM option `-ea`, as described in the [client developer tools](https://github.com/runelite/runelite/wiki/Using-the-client-developer-tools) page.
+On Windows, Java 11 or newer can run that jar. RuneLite launcher 2.6.7 already ships one at `%LOCALAPPDATA%\RuneLite\jre\bin\java.exe` (Temurin 11.0.19 on 64-bit Windows). Put `Launch Bank Section Labels.bat` in the same folder as the `-all` jar and double-click the bat, or run:
 
-The plugin then appears in the side panel. Developer mode is not meant for normal play.
+```bat
+"%LOCALAPPDATA%\RuneLite\jre\bin\java.exe" -ea -jar bank-section-labels-1.0.0-all.jar --developer-mode
+```
+
+Double-clicking the jar itself only works when Windows has a Java 11+ install associated with `.jar` files. The bundled JRE is not that association, so the bat is the reliable path.
+
+The test client uses the same `%USERPROFILE%\.runelite` folder as the release client.
+
+### Logging in with a Jagex account
+
+On client 1.13.7 the game still reads `%USERPROFILE%\.runelite\credentials.properties` (override the file name with `-Drunelite.credentials.path`). It writes that file only when it is started with `--insecure-write-credentials` and the Jagex Launcher has set `JX_ACCESS_TOKEN`, `JX_REFRESH_TOKEN`, `JX_SESSION_ID`, `JX_CHARACTER_ID`, and `JX_DISPLAY_NAME`. A normal RuneLite shortcut does not set those variables.
+
+1. In RuneLite (configure), add the client argument `--insecure-write-credentials`.
+2. Start RuneLite once from the Jagex Launcher so those variables exist and the file is written.
+3. Remove the argument again. Launch this test client. It reads the same file and does not need the flag.
+
+The dev client can also log in on its own. Open it, use the account button in the sidebar, and choose **Add Jagex Account**. That stores the session in `.runelite\jagex-accounts.dat` and does not need `credentials.properties`. The current steps are at <https://github.com/runelite/runelite/wiki/Using-Jagex-Accounts>.
+
+`bank-section-labels-1.0.0.jar` (no `-all`) is only the plugin classes. The release client will not load it.
 
 ## Submit it to the Plugin Hub later
 

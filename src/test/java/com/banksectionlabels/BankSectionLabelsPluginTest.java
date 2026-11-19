@@ -24,14 +24,58 @@
  */
 package com.banksectionlabels;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import net.runelite.client.RuneLite;
 import net.runelite.client.externalplugins.ExternalPluginManager;
+import org.junit.Test;
+
+import static org.junit.Assert.assertEquals;
 
 public class BankSectionLabelsPluginTest
 {
 	public static void main(String[] args) throws Exception
 	{
 		ExternalPluginManager.loadBuiltin(BankSectionLabelsPlugin.class);
-		RuneLite.main(args);
+		RuneLite.main(withDefaultArgs(args));
+	}
+
+	/**
+	 * Double-clicking the shaded jar passes no arguments. Developer mode is
+	 * required for this launcher, so add the example-plugin flags when the
+	 * caller did not.
+	 */
+	static String[] withDefaultArgs(String[] args)
+	{
+		List<String> out = new ArrayList<>();
+		if (!Arrays.asList(args).contains("--developer-mode"))
+		{
+			out.add("--developer-mode");
+		}
+		if (!Arrays.asList(args).contains("--debug"))
+		{
+			out.add("--debug");
+		}
+		out.addAll(Arrays.asList(args));
+		return out.toArray(new String[0]);
+	}
+
+	@Test
+	public void addsDeveloperModeWhenMissing()
+	{
+		assertEquals(
+			Arrays.asList("--developer-mode", "--debug", "--safe-mode"),
+			Arrays.asList(withDefaultArgs(new String[]{"--safe-mode"}))
+		);
+	}
+
+	@Test
+	public void doesNotDuplicateFlags()
+	{
+		assertEquals(
+			Arrays.asList("--developer-mode", "--debug"),
+			Arrays.asList(withDefaultArgs(new String[]{"--developer-mode", "--debug"}))
+		);
 	}
 }
