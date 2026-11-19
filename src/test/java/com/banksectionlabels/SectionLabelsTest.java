@@ -73,6 +73,19 @@ public class SectionLabelsTest
 	}
 
 	@Test
+	public void upsertKeepsASecondItemAsItsOwnLabel()
+	{
+		List<SectionLabel> labels = Collections.singletonList(new SectionLabel(0, 590, 0, "Woodcutting and Firemaking"));
+
+		List<SectionLabel> updated = SectionLabels.upsert(labels, new SectionLabel(0, 1511, 0, "Herbs"));
+
+		assertEquals(Arrays.asList(
+			new SectionLabel(0, 590, 0, "Woodcutting and Firemaking"),
+			new SectionLabel(0, 1511, 0, "Herbs")
+		), updated);
+	}
+
+	@Test
 	public void upsertReplacesTheSameAnchor()
 	{
 		List<SectionLabel> labels = Collections.singletonList(new SectionLabel(6, 249, 0, "Herbs"));

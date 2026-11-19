@@ -60,14 +60,14 @@ import net.runelite.client.plugins.banktags.BankTagsService;
 import net.runelite.client.ui.overlay.OverlayManager;
 
 /**
- * Inserts a gap above labeled rows in the vanilla bank by moving item widgets
- * down, then draws the heading in that gap.
+ * Starts each labeled item on its own row in the vanilla bank, then draws the
+ * heading in the gap above that row.
  * <p>
- * Widget Y is changed with {@code setOriginalY} and {@code revalidate}, the same
- * approach Bank Tags uses to place items in a layout. Child indexes, item ids,
- * and menu actions are left alone, so withdraw, deposit, placeholders, and
- * drag-rearrange still hit the real bank slot. The scroll height grows by the
- * same amount so the last rows stay reachable.
+ * Widget X and Y are changed with {@code setOriginalX}, {@code setOriginalY},
+ * and {@code revalidate}, the same approach Bank Tags uses to place items.
+ * Child indexes, item ids, and menu actions are left alone, so a drag, withdraw,
+ * or deposit still hits the real bank slot of the item you see. The scroll
+ * height grows so the last rows stay reachable.
  */
 @Slf4j
 @PluginDescriptor(
@@ -261,8 +261,8 @@ public class BankSectionLabelsPlugin extends Plugin
 
 		List<BankLayoutPlanner.ItemSlot> slots = visibleItems(container);
 		List<SectionLabel> labels = SectionLabels.forTab(loadLabels(), currentTab());
-		BankLayoutPlanner.Result plan = BankLayoutPlanner.plan(slots, labels, config.headerHeight(), identity());
-		if (plan.getExtraScroll() <= 0)
+		BankLayoutPlanner.Result plan = BankLayoutPlanner.plan(slots, labels, config.headerHeight(), identity(), container.getWidth());
+		if (plan.isEmpty())
 		{
 			overlay.setSections(Collections.emptyList());
 			return;
@@ -274,13 +274,27 @@ public class BankSectionLabelsPlugin extends Plugin
 			{
 				continue;
 			}
-			int shift = plan.shiftForY(child.getOriginalY());
-			if (shift == 0)
+			BankLayoutPlanner.Placement placement = plan.placementFor(child.getIndex());
+			if (placement != null)
+			{
+				if (child.getOriginalX() != placement.getX() || child.getOriginalY() != placement.getY())
+				{
+					child.setOriginalX(placement.getX());
+					child.setOriginalY(placement.getY());
+					child.revalidate();
+				}
+				continue;
+			}
+			if (isItemWidget(child))
 			{
 				continue;
 			}
-			child.setOriginalY(child.getOriginalY() + shift);
-			child.revalidate();
+			int separatorY = plan.yForNonItem(child.getOriginalY(), child.getOriginalHeight());
+			if (separatorY != child.getOriginalY())
+			{
+				child.setOriginalY(separatorY);
+				child.revalidate();
+			}
 		}
 
 		int bottom = 0;

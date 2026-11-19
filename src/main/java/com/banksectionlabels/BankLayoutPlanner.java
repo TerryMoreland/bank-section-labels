@@ -33,12 +33,12 @@ import java.util.Map;
 import java.util.TreeMap;
 
 /**
- * Decides which bank rows need a heading and how far each original Y must move
- * to open a gap above those rows.
+ * Reflows a vanilla bank tab so each labeled item starts a new row.
  * <p>
- * Rows are groups of items that already share a Y. The vanilla bank uses a
- * 36px stride (32px item plus 4px gap) and 8 columns, but the plan uses the
- * Y values it is given, so a wider resized bank still lines up.
+ * Items stay in their real bank order. A section head that is not already in
+ * the first column finishes the previous row early (the rest of that row stays
+ * empty), then a header gap is inserted and the head is placed at column 0.
+ * Later items fill that row and the rows under it until the next head.
  */
 public final class BankLayoutPlanner
 {
@@ -48,7 +48,8 @@ public final class BankLayoutPlanner
 	/** Vanilla distance from one item row to the next. */
 	public static final int ROW_STRIDE = 36;
 
-	private static final String TEXT_JOINER = " · ";
+	/** Vanilla distance from one column to the next. */
+	public static final int COLUMN_STRIDE = 48;
 
 	private BankLayoutPlanner()
 	{
@@ -105,27 +106,63 @@ public final class BankLayoutPlanner
 		}
 	}
 
+	public static final class Placement
+	{
+		private final int index;
+		private final int x;
+		private final int y;
+		private final int originalY;
+		private final boolean sectionHead;
+
+		Placement(int index, int x, int y, int originalY, boolean sectionHead)
+		{
+			this.index = index;
+			this.x = x;
+			this.y = y;
+			this.originalY = originalY;
+			this.sectionHead = sectionHead;
+		}
+
+		public int getIndex()
+		{
+			return index;
+		}
+
+		public int getX()
+		{
+			return x;
+		}
+
+		public int getY()
+		{
+			return y;
+		}
+
+		public int getOriginalY()
+		{
+			return originalY;
+		}
+
+		public boolean isSectionHead()
+		{
+			return sectionHead;
+		}
+	}
+
 	public static final class PlacedLabel
 	{
 		private final int anchorIndex;
-		private final int rowY;
 		private final String text;
 
-		PlacedLabel(int anchorIndex, int rowY, String text)
+		PlacedLabel(int anchorIndex, String text)
 		{
 			this.anchorIndex = anchorIndex;
-			this.rowY = rowY;
 			this.text = text;
 		}
 
 		public int getAnchorIndex()
 		{
 			return anchorIndex;
-		}
-
-		public int getRowY()
-		{
-			return rowY;
 		}
 
 		public String getText()
@@ -136,16 +173,16 @@ public final class BankLayoutPlanner
 
 	public static final class Result
 	{
-		private static final Result EMPTY = new Result(0, new int[0], Collections.emptyList());
+		private static final Result EMPTY = new Result(0, Collections.emptyList(), Collections.emptyList());
 
 		private final int headerHeight;
-		private final int[] labeledRowYs;
+		private final List<Placement> placements;
 		private final List<PlacedLabel> labels;
 
-		private Result(int headerHeight, int[] labeledRowYs, List<PlacedLabel> labels)
+		private Result(int headerHeight, List<Placement> placements, List<PlacedLabel> labels)
 		{
 			this.headerHeight = headerHeight;
-			this.labeledRowYs = labeledRowYs;
+			this.placements = placements;
 			this.labels = labels;
 		}
 
@@ -154,9 +191,14 @@ public final class BankLayoutPlanner
 			return EMPTY;
 		}
 
-		public int getExtraScroll()
+		public boolean isEmpty()
 		{
-			return labeledRowYs.length * headerHeight;
+			return labels.isEmpty();
+		}
+
+		public List<Placement> getPlacements()
+		{
+			return placements;
 		}
 
 		public List<PlacedLabel> getLabels()
@@ -164,25 +206,41 @@ public final class BankLayoutPlanner
 			return labels;
 		}
 
-		/**
-		 * Pixels to add to a widget whose current original Y is {@code originalY}.
-		 * The labeled row itself moves down, which opens the gap above it.
-		 */
-		public int shiftForY(int originalY)
+		public Placement placementFor(int index)
 		{
-			int rowsAboveOrAt = 0;
-			for (int rowY : labeledRowYs)
+			for (Placement placement : placements)
 			{
-				if (rowY <= originalY)
+				if (placement.getIndex() == index)
 				{
-					rowsAboveOrAt++;
-				}
-				else
-				{
-					break;
+					return placement;
 				}
 			}
-			return rowsAboveOrAt * headerHeight;
+			return null;
+		}
+
+		/**
+		 * Y for a non-item widget (a tab separator on the all-items tab) that
+		 * used to sit at {@code originalY}, so it stays above the items that
+		 * were below it, including a section gap.
+		 */
+		public int yForNonItem(int originalY, int height)
+		{
+			int top = Integer.MAX_VALUE;
+			boolean head = false;
+			for (Placement placement : placements)
+			{
+				if (placement.getOriginalY() > originalY && placement.getY() < top)
+				{
+					top = placement.getY();
+					head = placement.isSectionHead();
+				}
+			}
+			if (top == Integer.MAX_VALUE)
+			{
+				return originalY;
+			}
+			int visualTop = head ? top - headerHeight : top;
+			return Math.max(0, visualTop - height);
 		}
 	}
 
@@ -244,63 +302,152 @@ public final class BankLayoutPlanner
 		return -1;
 	}
 
-	public static Result plan(List<ItemSlot> items, List<SectionLabel> labels, int headerHeight, ItemIdentity identity)
+	public static Result plan(List<ItemSlot> items, List<SectionLabel> labels, int headerHeight, ItemIdentity identity, int containerWidth)
 	{
 		if (headerHeight <= 0 || items == null || items.isEmpty() || labels == null || labels.isEmpty())
 		{
 			return Result.empty();
 		}
 
-		TreeMap<Integer, List<ItemSlot>> rows = new TreeMap<>();
-		for (ItemSlot slot : items)
-		{
-			rows.computeIfAbsent(slot.getY(), y -> new ArrayList<>()).add(slot);
-		}
-		for (List<ItemSlot> row : rows.values())
-		{
-			row.sort(Comparator.comparingInt(ItemSlot::getX).thenComparingInt(ItemSlot::getIndex));
-		}
-
-		Map<Integer, Integer> seen = new HashMap<>();
-		List<Integer> labeledYs = new ArrayList<>();
-		List<PlacedLabel> placed = new ArrayList<>();
-
-		for (Map.Entry<Integer, List<ItemSlot>> entry : rows.entrySet())
-		{
-			int rowY = entry.getKey();
-			List<ItemSlot> row = entry.getValue();
-			List<String> texts = new ArrayList<>();
-			for (ItemSlot slot : row)
-			{
-				int norm = normalize(slot.getItemId(), identity);
-				int occurrence = seen.getOrDefault(norm, 0);
-				seen.put(norm, occurrence + 1);
-				for (SectionLabel label : labels)
-				{
-					if (label.getItemId() == norm && label.getOccurrence() == occurrence)
-					{
-						texts.add(label.getText());
-					}
-				}
-			}
-			if (!texts.isEmpty())
-			{
-				labeledYs.add(rowY);
-				placed.add(new PlacedLabel(row.get(0).getIndex(), rowY, String.join(TEXT_JOINER, texts)));
-			}
-		}
-
-		if (labeledYs.isEmpty())
+		List<ItemSlot> ordered = ordered(items);
+		Grid grid = detectGrid(ordered, containerWidth);
+		boolean[] heads = new boolean[ordered.size()];
+		String[] texts = new String[ordered.size()];
+		if (!markHeads(ordered, labels, identity, heads, texts))
 		{
 			return Result.empty();
 		}
 
-		int[] ys = new int[labeledYs.size()];
-		for (int i = 0; i < labeledYs.size(); i++)
+		int y = ordered.get(0).getY();
+		int column = 0;
+		int previousOriginalY = ordered.get(0).getY();
+		List<Placement> placements = new ArrayList<>(ordered.size());
+		List<PlacedLabel> placed = new ArrayList<>();
+
+		for (int i = 0; i < ordered.size(); i++)
 		{
-			ys[i] = labeledYs.get(i);
+			ItemSlot slot = ordered.get(i);
+			if (slot.getY() > previousOriginalY)
+			{
+				int extra = slot.getY() - previousOriginalY - grid.rowStride;
+				previousOriginalY = slot.getY();
+				if (extra > 0)
+				{
+					if (column != 0)
+					{
+						column = 0;
+						y += grid.rowStride;
+					}
+					y += extra;
+				}
+			}
+
+			if (column >= grid.columns)
+			{
+				column = 0;
+				y += grid.rowStride;
+			}
+
+			if (heads[i])
+			{
+				if (column != 0)
+				{
+					column = 0;
+					y += grid.rowStride;
+				}
+				placed.add(new PlacedLabel(slot.getIndex(), texts[i]));
+				y += headerHeight;
+			}
+
+			int x = grid.startX + column * grid.columnStride;
+			placements.add(new Placement(slot.getIndex(), x, y, slot.getY(), heads[i]));
+			column++;
 		}
-		return new Result(headerHeight, ys, placed);
+
+		return new Result(headerHeight, placements, placed);
+	}
+
+	private static boolean markHeads(List<ItemSlot> ordered, List<SectionLabel> labels, ItemIdentity identity, boolean[] heads, String[] texts)
+	{
+		Map<Integer, Integer> seen = new HashMap<>();
+		boolean any = false;
+		for (int i = 0; i < ordered.size(); i++)
+		{
+			int norm = normalize(ordered.get(i).getItemId(), identity);
+			int occurrence = seen.getOrDefault(norm, 0);
+			seen.put(norm, occurrence + 1);
+			String text = null;
+			for (SectionLabel label : labels)
+			{
+				if (label.getItemId() == norm && label.getOccurrence() == occurrence)
+				{
+					text = label.getText();
+				}
+			}
+			if (text != null)
+			{
+				heads[i] = true;
+				texts[i] = text;
+				any = true;
+			}
+		}
+		return any;
+	}
+
+	private static Grid detectGrid(List<ItemSlot> ordered, int containerWidth)
+	{
+		int startX = ordered.get(0).getX();
+		for (ItemSlot slot : ordered)
+		{
+			if (slot.getX() < startX)
+			{
+				startX = slot.getX();
+			}
+		}
+
+		int columnStride = COLUMN_STRIDE;
+		TreeMap<Integer, Integer> rowCounts = new TreeMap<>();
+		Map<Integer, Integer> strideCounts = new HashMap<>();
+		int previousX = -1;
+		int previousY = Integer.MIN_VALUE;
+		for (ItemSlot slot : ordered)
+		{
+			rowCounts.put(slot.getY(), rowCounts.getOrDefault(slot.getY(), 0) + 1);
+			if (slot.getY() == previousY && slot.getX() > previousX)
+			{
+				int diff = slot.getX() - previousX;
+				if (diff >= 32 && diff <= 80)
+				{
+					strideCounts.put(diff, strideCounts.getOrDefault(diff, 0) + 1);
+				}
+			}
+			previousX = slot.getX();
+			previousY = slot.getY();
+		}
+		int bestStrideCount = 0;
+		for (Map.Entry<Integer, Integer> entry : strideCounts.entrySet())
+		{
+			if (entry.getValue() > bestStrideCount)
+			{
+				bestStrideCount = entry.getValue();
+				columnStride = entry.getKey();
+			}
+		}
+
+		int columns = 8;
+		if (containerWidth > startX && columnStride > 0)
+		{
+			int guess = (containerWidth - startX) / columnStride;
+			if (guess >= 1 && guess <= 20)
+			{
+				columns = guess;
+			}
+		}
+		if (rowCounts.size() >= 2)
+		{
+			columns = Math.max(1, rowCounts.firstEntry().getValue());
+		}
+		return new Grid(startX, columnStride, ROW_STRIDE, columns);
 	}
 
 	private static List<ItemSlot> ordered(List<ItemSlot> items)
@@ -311,5 +458,21 @@ public final class BankLayoutPlanner
 			.thenComparingInt(ItemSlot::getX)
 			.thenComparingInt(ItemSlot::getIndex));
 		return ordered;
+	}
+
+	private static final class Grid
+	{
+		private final int startX;
+		private final int columnStride;
+		private final int rowStride;
+		private final int columns;
+
+		private Grid(int startX, int columnStride, int rowStride, int columns)
+		{
+			this.startX = startX;
+			this.columnStride = columnStride;
+			this.rowStride = rowStride;
+			this.columns = Math.max(1, columns);
+		}
 	}
 }

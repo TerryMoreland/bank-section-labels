@@ -1,20 +1,20 @@
 # Bank Section Labels
 
-A RuneLite plugin that draws your own text headings above groups of items in the **regular bank** (the vanilla tabs, including the main “all items” tab). It is not a Bank Tags layout. Headings stay stuck to the item you labeled, and the row moves down so the text sits in a real gap instead of covering the icons.
-
-Example, on tab 6: a heading **Herbs** above the row where the herbs start, then **Seeds/Farming** above a later row.
+A RuneLite plugin that draws your own text headings above groups of items in the **regular bank** (the vanilla tabs, including the main “all items” tab). It is not a Bank Tags layout. Each labeled item starts a new row, with the heading in the gap above it. The rest of the previous row is left empty.
 
 ## How to use it
 
-1. Open your bank.
-2. Hold **Shift** and right-click the item that starts a group.
-3. Choose **Add section label**.
-4. Type the heading in the chatbox and press Enter. Leave the box empty and press Enter to remove it.
-5. The row that contains that item, and everything below it, shifts down. The heading is drawn in the gap and scrolls with the bank.
-
-Right-click that same item again (still holding Shift) for **Edit section label** or **Remove section label**.
+1. Open the bank and switch to the tab you want, or stay on the main all-items tab.
+2. Hold **Shift** and right-click the item that should lead the group. A placeholder is fine if you do not have another of that item.
+3. Choose **Add section label**, type the name, and press Enter.
+4. That item moves to the start of a new row. The heading sits in the gap above it. Items that were already after it in the bank fill the rest of that row, then the rows under it.
+5. To put more items in the group, drag them with the normal bank drag and drop them onto an item in the group. In insert mode, the dragged item takes that item’s place and the others shift. Drop onto the first item of the **next** group to add at the end of this one. The real bank order changes, so the group is still there the next time you open the bank.
+6. Hold Shift and right-click a different item, then add another label. That starts a second group on its own row. It does not replace the first label.
+7. Shift-right-click the leading item again for **Edit section label** or **Remove section label**.
 
 Turn **Require Shift for label menu** off in the plugin settings if you want those options on a normal right-click.
+
+The blank spaces at the end of a group’s row are not drop targets. The bank only accepts a drop on a real item widget, and a fake widget there would point at the wrong bank slot. Drop on the last item of the group, or on the first item of the next group.
 
 ### What a label sticks to
 
@@ -44,17 +44,18 @@ If a font is clipped, raise the header height. The default (24px) fits the bold 
 
 ## How the spacing works
 
-After the bank’s own layout script finishes (`BANKMAIN_FINISHBUILDING`), the plugin looks at the item widgets in the bank container. Items that share a Y coordinate are one row. For each labeled row it adds the header height to that row’s Y and to every widget below it, using `setOriginalY` and `revalidate`. The container’s scroll height grows by the same amount, and the scrollbar script is run again so you can still scroll to the last row.
+After the bank’s own layout script finishes (`BANKMAIN_FINISHBUILDING`), the plugin walks the visible items in bank order. When it reaches a labeled item that is not already in the first column, it stops the current row and starts that item at column 0 of the next row, with the header height inserted above it. Later items keep flowing in order until the next labeled item, which starts another row. Each item widget is moved with `setOriginalX`, `setOriginalY`, and `revalidate`. The scroll height grows to fit, and the scrollbar script runs again.
 
-That is the same idea Bank Tags uses when it places items in a layout (`LayoutManager` sets each item’s original X/Y and revalidates), and the same idea as the older “remove tab separators” code that rewrote `originalY` and then called `UPDATE_SCROLLBAR`. Click targets follow the widgets, because the client hit-tests the widget bounds. The plugin does not change item ids, child indexes, or the withdraw/deposit actions, and the menu entries it adds are client-side only (`MenuAction.RUNELITE`). Nothing extra is sent to the server, and no real bank item is moved.
+That is the same widget move Bank Tags uses for layouts. The widget’s child index is still the real bank slot, so withdraw, deposit, placeholders, and the normal drag (insert or swap) hit the item you see. Dragging really changes the bank order. The menu entries this plugin adds are client-side only (`MenuAction.RUNELITE`).
 
-Headings themselves are drawn by an overlay in the gap, clipped to the item container. Overlay text can use the full RuneLite font list. A text widget inside the bank could not.
+Headings are drawn above the bank, on a dark bar, clipped to the item container, so they stay readable over the bank and with 117 HD.
 
 ## Limitations
 
 - Headings are per vanilla tab. A label made on tab 6 does not also appear on the all-items tab. Add it there separately if you want it in both views.
 - Search, Bank Tags tag tabs, and potion storage hide the headings. If a tag tab is open, items are not shifted.
 - Duplicate item ids are told apart by visual order. Withdrawing an earlier copy of the same item makes a later copy take its place in that count. Labeling a unique item (the usual section start) does not have this problem.
+- The empty end of a group’s row is not a drop target. Drop on a real item in the group, or on the first item of the next group to append.
 - Clicks in the empty gap hit the bank background, not an item. Clicks on the items themselves still withdraw and deposit.
 - Another plugin that moves bank item widgets later in the same frame can fight this one. This plugin runs after the normal bank build and after Bank Tags’ layout pass.
 - Very large header heights, or a heading on many rows, make the bank scroll further. That is the inserted space.

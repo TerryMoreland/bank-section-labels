@@ -59,7 +59,9 @@ class BankSectionLabelsOverlay extends Overlay
 		this.client = client;
 		this.config = config;
 		setPosition(OverlayPosition.DYNAMIC);
-		setLayer(OverlayLayer.ABOVE_WIDGETS);
+		// Above the bank widgets, including when 117 HD composites the interface.
+		setLayer(OverlayLayer.ALWAYS_ON_TOP);
+		setPriority(PRIORITY_HIGHEST);
 	}
 
 	void setSections(List<SectionDraw> sections)
@@ -146,14 +148,19 @@ class BankSectionLabelsOverlay extends Overlay
 		}
 
 		int top = item.y - header;
+		int barX = viewport.x + 4;
+		int barW = Math.max(1, viewport.width - 8);
+		graphics.setColor(new Color(12, 10, 8, 220));
+		graphics.fillRect(barX, top, barW, Math.max(1, header - 1));
+
 		int baseline = top + (header - metrics.getHeight()) / 2 + metrics.getAscent();
 		if (config.divider())
 		{
 			baseline -= 1;
 		}
-		int textX = Math.max(item.x, viewport.x + 6);
+		int textX = Math.max(item.x, viewport.x + 8);
 
-		graphics.setColor(new Color(0, 0, 0, 170));
+		graphics.setColor(new Color(0, 0, 0, 220));
 		graphics.drawString(section.text, textX + 1, baseline + 1);
 		graphics.setColor(color);
 		graphics.drawString(section.text, textX, baseline);
@@ -161,7 +168,7 @@ class BankSectionLabelsOverlay extends Overlay
 		if (config.divider())
 		{
 			int lineY = item.y - 2;
-			graphics.drawLine(viewport.x + 6, lineY, viewport.x + viewport.width - 8, lineY);
+			graphics.drawLine(barX, lineY, barX + barW, lineY);
 		}
 	}
 
