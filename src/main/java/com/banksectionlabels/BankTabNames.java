@@ -45,6 +45,20 @@ final class BankTabNames
 		return display(tab, read(configManager, tab));
 	}
 
+	/**
+	 * A non-empty override is shown as-is (with the tab number prefixed when
+	 * the player did not type it). Otherwise the Bank Tab Names text is used,
+	 * and an empty name becomes {@code Tab N}.
+	 */
+	static String resolve(int tab, String override, String bankTabNamesText)
+	{
+		if (override != null && !plainText(override).isEmpty())
+		{
+			return display(tab, override);
+		}
+		return display(tab, bankTabNamesText);
+	}
+
 	static String read(ConfigManager configManager, int tab)
 	{
 		if (configManager == null || tab <= 0)

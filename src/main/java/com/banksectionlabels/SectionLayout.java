@@ -50,6 +50,9 @@ public final class SectionLayout
 	/** Vertical band for a numbered-tab title on the all-items view. */
 	public static final int TAB_HEADING_HEIGHT = 28;
 
+	/** Space between one tab's last row and the next tab's title, so they do not overlap. */
+	public static final int BLOCK_GAP = 12;
+
 	private SectionLayout()
 	{
 	}
@@ -467,8 +470,8 @@ public final class SectionLayout
 				}
 				int stored = section.cells.size();
 				int occupiedRows = Math.max(1, (Math.max(1, stored) + cols - 1) / cols);
-				boolean lastFull = stored > 0 && stored % cols == 0 && lastRowOccupied(section, cols);
-				int rows = occupiedRows + (lastFull ? 1 : 0);
+				// Always keep one empty row under the items so a drop below an item has a cell.
+				int rows = occupiedRows + 1;
 				int headerY = y;
 				headers.add(new Header(section.tab, s, section.name, spec.startX, headerY, spec.headerHeight));
 				int itemY = headerY + spec.headerHeight;
@@ -622,23 +625,6 @@ public final class SectionLayout
 			}
 		}
 		return out;
-	}
-
-	private static boolean lastRowOccupied(Section section, int columns)
-	{
-		int start = section.cells.size() - columns;
-		if (start < 0)
-		{
-			return false;
-		}
-		for (int i = start; i < section.cells.size(); i++)
-		{
-			if (section.cells.get(i) == EMPTY)
-			{
-				return false;
-			}
-		}
-		return true;
 	}
 
 	private static int firstEmpty(Section section)
@@ -945,6 +931,11 @@ public final class SectionLayout
 	 */
 	public static BankView layoutAll(List<BankItem> items, int[] tabCounts, List<Section> sections, Spec spec)
 	{
+		return layoutAll(items, tabCounts, sections, spec, true);
+	}
+
+	public static BankView layoutAll(List<BankItem> items, int[] tabCounts, List<Section> sections, Spec spec, boolean tabTitles)
+	{
 		List<Placed> placed = new ArrayList<>();
 		List<Header> headers = new ArrayList<>();
 		List<TabHeading> tabHeadings = new ArrayList<>();
@@ -974,11 +965,18 @@ public final class SectionLayout
 			{
 				if (any)
 				{
-					y += 4;
+					y += BLOCK_GAP;
 				}
-				tabHeadings.add(new TabHeading(tab, spec.startX, y, TAB_HEADING_HEIGHT));
-				breaks.add(y + TAB_HEADING_HEIGHT - 2);
-				y += TAB_HEADING_HEIGHT;
+				if (tabTitles)
+				{
+					tabHeadings.add(new TabHeading(tab, spec.startX, y, TAB_HEADING_HEIGHT));
+					breaks.add(y);
+					y += TAB_HEADING_HEIGHT;
+				}
+				else if (any)
+				{
+					breaks.add(y - BLOCK_GAP / 2);
+				}
 			}
 			any = true;
 			BankView part = layoutBlock(block, tab, dedupe(forTab(sections, tab)), spec, y);
@@ -987,6 +985,76 @@ public final class SectionLayout
 			y = part.contentBottom;
 		}
 		return new BankView(placed, headers, tabHeadings, y, breaks);
+	}
+
+	/**
+	 * Container-content Y of a canvas point. Scroll is added because widget
+	 * original Y is measured from the top of the scrolled content.
+	 */
+	public static int contentY(int mouseCanvasY, int containerCanvasY, int scrollY)
+	{
+		return mouseCanvasY - containerCanvasY + scrollY;
+	}
+
+	public static int contentX(int mouseCanvasX, int containerCanvasX)
+	{
+		return mouseCanvasX - containerCanvasX;
+	}
+
+	/**
+	 * Which section cell contains a point in container-content coordinates.
+	 * Returns {@code {tab, sectionIndex, cellIndex}}, or null.
+	 */
+	public static int[] hitTest(List<Placed> slots, int contentX, int contentY)
+	{
+		if (slots == null)
+		{
+			return null;
+		}
+		for (Placed slot : slots)
+		{
+			if (slot == null || !slot.inSection())
+			{
+				continue;
+			}
+			if (contentX >= slot.x && contentX < slot.x + BankLayoutPlanner.COLUMN_STRIDE
+				&& contentY >= slot.y && contentY < slot.y + BankLayoutPlanner.ROW_STRIDE)
+			{
+				return new int[]{slot.tab, slot.sectionIndex, slot.cellIndex};
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * A drop onto a different numbered tab has to move the real bank item into
+	 * that tab. A drop inside the same tab only changes the saved grid.
+	 */
+	public static boolean movesVanillaTab(int sourceTab, int destTab)
+	{
+		return destTab > 0 && sourceTab != destTab;
+	}
+
+	/**
+	 * Record a drop. When the source and destination tabs differ, the item is
+	 * removed from the source tab's sections and written into the destination cell.
+	 */
+	public static List<Section> placeItem(List<Section> all, int sourceTab, int sourceSection, int sourceCell, int itemId, int destTab, int destSection, int destCell)
+	{
+		List<Section> next = all == null ? new ArrayList<Section>() : all;
+		int fromSection = sourceSection;
+		int fromCell = sourceCell;
+		if (sourceTab != destTab)
+		{
+			if (sourceSection >= 0)
+			{
+				next = replaceTab(next, sourceTab, clearCell(forTab(next, sourceTab), sourceSection, sourceCell));
+			}
+			fromSection = -1;
+			fromCell = -1;
+		}
+		List<Section> dest = drop(forTab(next, destTab), fromSection, fromCell, itemId, destSection, destCell);
+		return replaceTab(next, destTab, dest);
 	}
 
 	private static BankView layoutBlock(List<BankItem> block, int tab, List<Section> sections, Spec spec, int startY)

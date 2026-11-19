@@ -104,6 +104,17 @@ public interface BankSectionLabelsConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "showTabTitles",
+		name = "Show tab titles",
+		description = "On the all-items view, draw a title above each numbered tab. Your own names override Bank Tab Names",
+		position = 8
+	)
+	default boolean showTabTitles()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "resetSections",
 		name = "Reset open tab's sections",
 		description = "Turn on to delete every section in the bank tab you are viewing. On the all-items view this clears only untabbed sections. Turns itself off",

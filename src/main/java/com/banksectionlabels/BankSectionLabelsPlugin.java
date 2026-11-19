@@ -51,6 +51,7 @@ import net.runelite.api.widgets.JavaScriptCallback;
 import net.runelite.api.widgets.Widget;
 import net.runelite.api.widgets.WidgetType;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.client.util.Text;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
@@ -95,8 +96,13 @@ public class BankSectionLabelsPlugin extends Plugin
 	private static final String REMOVE_SECTION = "Remove section";
 	private static final String REMOVE_FROM_SECTION = "Remove from section";
 	private static final String RESET_TAB = "Reset section labels for this tab";
+	private static final String RENAME_TAB = "Rename tab title";
 	private static final String EXAMINE = "Examine";
+	private static final String VIEW_TAB = "View tab";
 	private static final String PROXY_NAME = "bsl-cell";
+	private static final String HEADING_NAME = "bsl-heading";
+	/** Bank tab buttons are children 10–19 of the tab container (0 = all items). */
+	private static final int TAB_CHILD_START = 10;
 
 	@Inject
 	private Client client;
@@ -197,6 +203,14 @@ public class BankSectionLabelsPlugin extends Plugin
 	@Subscribe
 	public void onMenuEntryAdded(MenuEntryAdded event)
 	{
+		if (event == null || config == null || !config.enabled() || isPotionStorage())
+		{
+			return;
+		}
+		if (offerTabRename(event))
+		{
+			return;
+		}
 		if (event.getActionParam1() != InterfaceID.Bankmain.ITEMS || !EXAMINE.equals(event.getOption()))
 		{
 			return;
@@ -233,6 +247,10 @@ public class BankSectionLabelsPlugin extends Plugin
 
 		final int resetTab = placed != null ? placed[0] : owner;
 		addMenuEntry(RESET_TAB, target, () -> resetTab(resetTab));
+		if (owner >= 1 && owner <= 9)
+		{
+			addMenuEntry(RENAME_TAB, target, () -> promptTabTitle(owner));
+		}
 
 		if (placed == null || placed.length < 3 || placed[1] < 0)
 		{
@@ -283,6 +301,10 @@ public class BankSectionLabelsPlugin extends Plugin
 			if (container == null || !layoutAllowed())
 			{
 				clearLayoutVisuals();
+				if (container != null)
+				{
+					hideProxies(container.getChildren());
+				}
 				return;
 			}
 			applyLayout(container);
@@ -329,7 +351,7 @@ public class BankSectionLabelsPlugin extends Plugin
 		Map<Integer, Widget> byIndex = new HashMap<>();
 		for (Widget child : children)
 		{
-			if (child == null || PROXY_NAME.equals(child.getName()))
+			if (child == null || isOurWidget(child))
 			{
 				continue;
 			}
@@ -363,7 +385,7 @@ public class BankSectionLabelsPlugin extends Plugin
 		SectionLayout.BankView view;
 		if (tab == 0)
 		{
-			view = SectionLayout.layoutAll(bankItems, readTabCounts(), normalized(all), spec);
+			view = SectionLayout.layoutAll(bankItems, readTabCounts(), normalized(all), spec, config.showTabTitles());
 		}
 		else
 		{
@@ -423,19 +445,26 @@ public class BankSectionLabelsPlugin extends Plugin
 			}
 		}
 
-		int bottom = view.getContentBottom() + 8;
+		int bottom = view.getContentBottom() + BankLayoutPlanner.ROW_STRIDE;
 		int viewport = container.getHeight();
 		container.setScrollHeight(Math.max(bottom, viewport));
 
+		int headingWidth = layoutColumns * BankLayoutPlanner.COLUMN_STRIDE;
 		List<BankSectionLabelsOverlay.SectionDraw> drawn = new ArrayList<>();
-		for (SectionLayout.TabHeading heading : view.getTabHeadings())
+		if (config.showTabTitles())
 		{
-			drawn.add(new BankSectionLabelsOverlay.SectionDraw(
-				heading.getY(),
-				heading.getHeight(),
-				heading.getX(),
-				BankTabNames.heading(configManager, heading.getTab()),
-				true));
+			for (SectionLayout.TabHeading heading : view.getTabHeadings())
+			{
+				final int titledTab = heading.getTab();
+				String title = TabTitles.resolve(configManager, titledTab);
+				drawn.add(new BankSectionLabelsOverlay.SectionDraw(
+					heading.getY(),
+					heading.getHeight(),
+					heading.getX(),
+					title,
+					true));
+				createHeadingWidget(container, heading.getX(), heading.getY(), headingWidth, heading.getHeight(), RENAME_TAB, () -> promptTabTitle(titledTab));
+			}
 		}
 		for (SectionLayout.Header header : view.getHeaders())
 		{
@@ -443,7 +472,10 @@ public class BankSectionLabelsPlugin extends Plugin
 			{
 				continue;
 			}
+			final int sectionTab = header.getTab();
+			final int sectionIndex = header.getSectionIndex();
 			drawn.add(new BankSectionLabelsOverlay.SectionDraw(header.getY(), header.getHeight(), header.getX(), header.getName(), false));
+			createHeadingWidget(container, header.getX(), header.getY(), headingWidth, header.getHeight(), EDIT_LABEL, () -> promptSectionName(sectionTab, sectionIndex));
 		}
 		overlay.setSections(drawn);
 		log.debug("Placed {} heading(s) on bank tab {}", drawn.size(), tab);
@@ -512,6 +544,165 @@ public class BankSectionLabelsPlugin extends Plugin
 		}
 	}
 
+	private boolean offerTabRename(MenuEntryAdded event)
+	{
+		String option = Text.removeTags(event.getOption());
+		if (!VIEW_TAB.equals(option))
+		{
+			return false;
+		}
+		int tab;
+		try
+		{
+			tab = Integer.parseInt(Text.removeTags(event.getTarget()).trim());
+		}
+		catch (NumberFormatException ex)
+		{
+			return false;
+		}
+		if (tab < 1 || tab > 9)
+		{
+			return false;
+		}
+		final int titled = tab;
+		addMenuEntry(RENAME_TAB, event.getTarget(), () -> promptTabTitle(titled));
+		return true;
+	}
+
+	private void promptTabTitle(int tab)
+	{
+		if (chatboxPanelManager == null || tab < 1 || tab > 9)
+		{
+			return;
+		}
+		String current = TabTitles.resolve(configManager, tab);
+		chatboxPanelManager.openTextInput("Tab " + tab + " title (empty clears your name)")
+			.value(current == null ? "" : current)
+			.onDone(value ->
+			{
+				if (clientThread == null)
+				{
+					return;
+				}
+				clientThread.invoke(() -> applyTabTitle(tab, value));
+			})
+			.build();
+	}
+
+	private void applyTabTitle(int tab, String value)
+	{
+		try
+		{
+			java.util.Map<Integer, String> titles = TabTitles.withTitle(TabTitles.decode(TabTitles.readRaw(configManager)), tab, value);
+			TabTitles.save(configManager, titles);
+			relayout();
+		}
+		catch (RuntimeException ex)
+		{
+			log.warn("Could not save tab title", ex);
+		}
+	}
+
+	private void promptSectionName(int tab, int sectionIndex)
+	{
+		if (chatboxPanelManager == null)
+		{
+			return;
+		}
+		String current = sectionName(tab, sectionIndex);
+		chatboxPanelManager.openTextInput("Section label (leave empty to remove)")
+			.value(current)
+			.onDone(value ->
+			{
+				if (clientThread == null)
+				{
+					return;
+				}
+				clientThread.invoke(() -> applySectionName(tab, sectionIndex, value));
+			})
+			.build();
+	}
+
+	private void applySectionName(int tab, int sectionIndex, String value)
+	{
+		try
+		{
+			List<SectionLayout.Section> all = SectionLayout.prepare(loadSections());
+			List<SectionLayout.Section> tabSections = SectionLayout.forTab(all, tab);
+			String text = SectionLabels.sanitize(value);
+			if (text.isEmpty())
+			{
+				tabSections = SectionLayout.removeSection(tabSections, sectionIndex);
+			}
+			else
+			{
+				tabSections = SectionLayout.rename(tabSections, sectionIndex, text);
+			}
+			prepared = SectionLayout.replaceTab(all, tab, tabSections);
+			saveSections(prepared);
+			relayout();
+		}
+		catch (RuntimeException ex)
+		{
+			log.warn("Could not rename section", ex);
+		}
+	}
+
+	private Widget tabButton(int tab)
+	{
+		if (client == null || tab < 1 || tab > 9)
+		{
+			return null;
+		}
+		Widget tabs = client.getWidget(InterfaceID.Bankmain.TABS);
+		if (tabs == null)
+		{
+			return null;
+		}
+		Widget button = tabs.getChild(TAB_CHILD_START + tab);
+		if (button == null || button.isHidden())
+		{
+			return null;
+		}
+		return button;
+	}
+
+	private void createHeadingWidget(Widget container, int x, int y, int width, int height, String action, Runnable onClick)
+	{
+		if (container == null || onClick == null || width <= 0 || height <= 0)
+		{
+			return;
+		}
+		Widget heading = container.createChild(-1, WidgetType.RECTANGLE);
+		if (heading == null)
+		{
+			return;
+		}
+		heading.setName(HEADING_NAME);
+		heading.setOriginalX(x);
+		heading.setOriginalY(y);
+		heading.setOriginalWidth(width);
+		heading.setOriginalHeight(Math.max(1, height - 2));
+		heading.setOpacity(255);
+		heading.setFilled(false);
+		heading.setHidden(false);
+		heading.setHasListener(true);
+		heading.setNoClickThrough(true);
+		heading.setAction(0, action);
+		heading.setOnOpListener((JavaScriptCallback) ev -> onClick.run());
+		heading.revalidate();
+		proxies.add(heading);
+	}
+
+	private static boolean isOurWidget(Widget widget)
+	{
+		if (widget == null || widget.getName() == null)
+		{
+			return false;
+		}
+		return widget.getName().startsWith("bsl-");
+	}
+
 	private void promptForLabel(int tab, int itemId, String initial)
 	{
 		if (chatboxPanelManager == null)
@@ -568,17 +759,19 @@ public class BankSectionLabelsPlugin extends Plugin
 			{
 				return;
 			}
-			int[] destination = destinationCell(event.getTarget() != null ? event.getTarget() : client.getDraggedOnWidget(), event);
+			int[] destination = destinationCell(event.getTarget() != null ? event.getTarget() : client.getDraggedOnWidget());
 			if (destination == null)
 			{
+				Widget landed = client.getDraggedOnWidget();
+				if (landed != null && isOurWidget(landed))
+				{
+					client.setDraggedOnWidget(null);
+				}
 				return;
 			}
 			int viewTab = currentTab();
 			int sourceTab = viewTab == 0 ? SectionLayout.tabForSlot(source.getIndex(), readTabCounts()) : viewTab;
-			if (sourceTab != destination[0])
-			{
-				return;
-			}
+			int destTab = destination[0];
 			long now = System.nanoTime();
 			if (now - handledDropNanos < 200_000_000L)
 			{
@@ -586,19 +779,43 @@ public class BankSectionLabelsPlugin extends Plugin
 				return;
 			}
 			handledDropNanos = now;
-			client.setDraggedOnWidget(null);
 
 			int[] sourceCell = cellByBankIndex.get(source.getIndex());
-			int sourceSection = sourceCell == null || sourceCell.length < 3 ? -1 : sourceCell[1];
-			int sourceIndex = sourceCell == null || sourceCell.length < 3 ? -1 : sourceCell[2];
+			int sourceSection = sourceCell == null || sourceCell.length < 3 || sourceCell[0] != sourceTab ? -1 : sourceCell[1];
+			int sourceIndex = sourceCell == null || sourceCell.length < 3 || sourceCell[0] != sourceTab ? -1 : sourceCell[2];
 			int sourceItem = normalizeId(source.getItemId());
 			if (sourceItem < 0)
 			{
 				return;
 			}
-			List<SectionLayout.Section> tabSections = SectionLayout.forTab(prepared, destination[0]);
-			saveOneTab(destination[0], SectionLayout.drop(tabSections, sourceSection, sourceIndex, sourceItem, destination[1], destination[2]));
-			relayout();
+
+			boolean moveTab = SectionLayout.movesVanillaTab(sourceTab, destTab);
+			if (moveTab)
+			{
+				Widget tabButton = tabButton(destTab);
+				if (tabButton != null)
+				{
+					// The client sends the normal drag-onto-tab packet from whatever
+					// widget is dragged on when this listener returns.
+					client.setDraggedOnWidget(tabButton);
+				}
+				else
+				{
+					client.setDraggedOnWidget(null);
+					log.warn("Could not find bank tab {} to move the item into", destTab);
+				}
+			}
+			else
+			{
+				client.setDraggedOnWidget(null);
+			}
+
+			prepared = SectionLayout.placeItem(prepared, sourceTab, sourceSection, sourceIndex, sourceItem, destTab, destination[1], destination[2]);
+			saveSections(prepared);
+			if (!moveTab)
+			{
+				relayout();
+			}
 		}
 		catch (RuntimeException ex)
 		{
@@ -606,7 +823,7 @@ public class BankSectionLabelsPlugin extends Plugin
 		}
 	}
 
-	private int[] destinationCell(Widget target, ScriptEvent event)
+	private int[] destinationCell(Widget target)
 	{
 		if (target != null)
 		{
@@ -635,21 +852,9 @@ public class BankSectionLabelsPlugin extends Plugin
 		{
 			return null;
 		}
-		int localX = mouse.getX() - origin.getX();
-		int localY = mouse.getY() - origin.getY() + container.getScrollY();
-		for (SectionLayout.Placed slot : hitSlots)
-		{
-			if (!slot.inSection())
-			{
-				continue;
-			}
-			if (localX >= slot.getX() && localX < slot.getX() + BankLayoutPlanner.COLUMN_STRIDE
-				&& localY >= slot.getY() && localY < slot.getY() + BankLayoutPlanner.ROW_STRIDE)
-			{
-				return new int[]{slot.getTab(), slot.getSectionIndex(), slot.getCellIndex()};
-			}
-		}
-		return null;
+		int localX = SectionLayout.contentX(mouse.getX(), origin.getX());
+		int localY = SectionLayout.contentY(mouse.getY(), origin.getY(), container.getScrollY());
+		return SectionLayout.hitTest(hitSlots, localX, localY);
 	}
 
 	private void addMenuEntry(String option, String target, Runnable action)
@@ -906,7 +1111,7 @@ public class BankSectionLabelsPlugin extends Plugin
 		{
 			for (Widget child : children)
 			{
-				if (child != null && PROXY_NAME.equals(child.getName()))
+				if (child != null && isOurWidget(child))
 				{
 					child.setHidden(true);
 				}

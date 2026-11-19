@@ -39,5 +39,8 @@ public class BankTabNamesTest
 		assertEquals("4 Bossing", BankTabNames.display(4, "<col=ffb000>4 Bossing<br>extra"));
 		assertEquals("Tab 3", BankTabNames.display(3, "  "));
 		assertEquals("Tab 8", BankTabNames.display(8, null));
+		assertEquals("2 Ranged", BankTabNames.resolve(2, "Ranged", "Magic"));
+		assertEquals("2 Magic", BankTabNames.resolve(2, "  ", "Magic"));
+		assertEquals("Tab 2", BankTabNames.resolve(2, "", ""));
 	}
 }

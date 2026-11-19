@@ -270,6 +270,93 @@ public class SectionLayoutTest
 		assertEquals(BankLayoutPlanner.START_X, view.getTabHeadings().get(0).getX());
 	}
 
+	@Test
+	public void cellBelowAnItemIsARealDropTarget()
+	{
+		List<SectionLayout.Section> sections = Collections.singletonList(
+			new SectionLayout.Section(2, 8, "Barrows", SectionLayout.cells(HELM, BODY, LEGS, 4587)));
+		SectionLayout.Arrangement arranged = SectionLayout.arrange(0, sections, SectionLayout.spec(8, 24));
+
+		SectionLayout.Slot helm = cell(arranged, 0);
+		SectionLayout.Slot below = cell(arranged, 8);
+		assertEquals(helm.getX(), below.getX());
+		assertEquals(helm.getY() + BankLayoutPlanner.ROW_STRIDE, below.getY());
+		assertTrue(below.isEmpty());
+
+		List<SectionLayout.Section> dropped = SectionLayout.drop(sections, -1, -1, 11840, 0, 8);
+		assertEquals(Integer.valueOf(HELM), dropped.get(0).getCells().get(0));
+		assertEquals(Integer.valueOf(11840), dropped.get(0).getCells().get(8));
+	}
+
+	@Test
+	public void mainViewHitTestUsesHeaderAndScrollCoordinates()
+	{
+		int[] counts = {1, 0, 0, 0, 0, 0, 0, 0, 0};
+		List<SectionLayout.BankItem> items = Arrays.asList(
+			new SectionLayout.BankItem(0, TINDERBOX),
+			new SectionLayout.BankItem(1, 995)
+		);
+		List<SectionLayout.Section> sections = Collections.singletonList(
+			new SectionLayout.Section(1, 8, "Firemaking", SectionLayout.cells(TINDERBOX)));
+		SectionLayout.BankView view = SectionLayout.layoutAll(items, counts, sections, SectionLayout.spec(8, 24));
+
+		SectionLayout.Placed below = null;
+		for (SectionLayout.Placed placed : view.getPlaced())
+		{
+			if (placed.getTab() == 1 && placed.getCellIndex() == 8)
+			{
+				below = placed;
+				break;
+			}
+		}
+		assertTrue(below != null);
+		assertTrue(below.getY() > view.getTabHeadings().get(0).getY() + view.getTabHeadings().get(0).getHeight());
+
+		int[] hit = SectionLayout.hitTest(view.getPlaced(), below.getX() + 3, below.getY() + 3);
+		assertEquals(1, hit[0]);
+		assertEquals(0, hit[1]);
+		assertEquals(8, hit[2]);
+
+		int originY = 400;
+		int scroll = 90;
+		int mouseY = originY + below.getY() - scroll + 2;
+		int contentY = SectionLayout.contentY(mouseY, originY, scroll);
+		int[] scrolled = SectionLayout.hitTest(view.getPlaced(), SectionLayout.contentX(below.getX() + 1, 0), contentY);
+		assertEquals(8, scrolled[2]);
+
+		int headingY = view.getTabHeadings().get(0).getY() + 4;
+		assertTrue(SectionLayout.hitTest(view.getPlaced(), below.getX() + 1, headingY) == null);
+	}
+
+	@Test
+	public void dropIntoAnotherTabsSectionRecordsThatCell()
+	{
+		assertTrue(SectionLayout.movesVanillaTab(0, 2));
+		assertTrue(!SectionLayout.movesVanillaTab(2, 2));
+		assertTrue(!SectionLayout.movesVanillaTab(1, 0));
+
+		List<SectionLayout.Section> sections = Collections.singletonList(
+			new SectionLayout.Section(2, 8, "Bows", SectionLayout.cells(841)));
+		List<SectionLayout.Section> placed = SectionLayout.placeItem(sections, 0, -1, -1, 882, 2, 0, 8);
+		assertEquals(1, placed.size());
+		assertEquals(2, placed.get(0).getTab());
+		assertEquals(Integer.valueOf(841), placed.get(0).getCells().get(0));
+		assertEquals(Integer.valueOf(882), placed.get(0).getCells().get(8));
+	}
+
+	@Test
+	public void hiddenTabTitlesLeaveTheItemOrderIntact()
+	{
+		int[] counts = {1, 0, 0, 0, 0, 0, 0, 0, 0};
+		List<SectionLayout.BankItem> items = Arrays.asList(
+			new SectionLayout.BankItem(0, TINDERBOX),
+			new SectionLayout.BankItem(1, 995)
+		);
+		SectionLayout.BankView view = SectionLayout.layoutAll(items, counts, Collections.emptyList(), SectionLayout.spec(8, 24), false);
+		assertTrue(view.getTabHeadings().isEmpty());
+		assertTrue(placed(view, 1).getY() < placed(view, 0).getY());
+	}
+
 	private static SectionLayout.Slot cell(SectionLayout.Arrangement arranged, int cellIndex)
 	{
 		return cell(arranged, 0, cellIndex);

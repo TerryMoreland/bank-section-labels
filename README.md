@@ -19,7 +19,10 @@ The grid is saved per account. It does not depend on the order of items in the r
 ### What a label sticks to
 
 - A section belongs to the vanilla tab the item is in. Building it on tab 2 and editing it from the all-items view changes the same section.
-- On the all-items view, untabbed items stay at the top. Each numbered tab then gets a bold yellow-orange title (`2 Melee`, or `Tab 2` if Bank Tab Names has no name for it), then that tab's loose items, then its smaller orange section labels and grids.
+- On the all-items view, untabbed items stay at the top. Each numbered tab then gets a bold yellow-orange title, then that tab's loose items, then its smaller orange section labels and grids.
+- The title is the name you set with **Rename tab title** (right-click the tab button, the title itself, or an item in that tab). If you have not set one, it uses Bank Tab Names, then `Tab N`. Leave the box empty to clear your name. **Show tab titles** turns the titles off.
+- Right-click a section heading for **Edit section label**.
+- Drop an item on any cell in a section, including the empty row under the items. Dropping it under another tab's title moves it into that tab and records the cell.
 - A placeholder of an item counts as that item, so a section still shows the item if a placeholder is all you have.
 - While bank search is open, headings are hidden and the bank is left as the game drew it.
 - Bank Tags tag tabs, Bank Tag Layouts, and the potion storage are left alone.
@@ -38,6 +41,7 @@ Labels are saved per account with RuneLite’s profile config, so they come back
 | Header height | How many pixels of space are inserted above the labeled row |
 | Header background | A dark bar behind headings. Off by default |
 | Reset open tab's sections | Deletes the sections for the tab you are viewing, then turns itself off. On the all-items view this clears only untabbed sections. Shift-right-click an item and choose **Reset section labels for this tab** to clear the tab that item belongs to |
+| Show tab titles | Titles above each numbered tab on the all-items view. Off leaves the section labels |
 
 If a font is clipped, raise the header height. The default (24px) fits the bold RuneScape font.
 
