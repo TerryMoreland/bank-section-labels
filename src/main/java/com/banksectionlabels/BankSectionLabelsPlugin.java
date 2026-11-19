@@ -94,6 +94,7 @@ public class BankSectionLabelsPlugin extends Plugin
 	private static final String EDIT_LABEL = "Edit section label";
 	private static final String REMOVE_SECTION = "Remove section";
 	private static final String REMOVE_FROM_SECTION = "Remove from section";
+	private static final String RESET_TAB = "Reset section labels for this tab";
 	private static final String EXAMINE = "Examine";
 	private static final String PROXY_NAME = "bsl-cell";
 
@@ -133,8 +134,8 @@ public class BankSectionLabelsPlugin extends Plugin
 	private final List<Widget> proxies = new ArrayList<>();
 	private final Map<Widget, int[]> proxyCells = new HashMap<>();
 	private final Map<Integer, int[]> cellByBankIndex = new HashMap<>();
-	private final List<SectionLayout.Slot> hitSlots = new ArrayList<>();
-	private List<SectionLayout.Section> tabSections = new ArrayList<>();
+	private final List<SectionLayout.Placed> hitSlots = new ArrayList<>();
+	private List<SectionLayout.Section> prepared = new ArrayList<>();
 
 	@Override
 	protected void startUp()
@@ -163,10 +164,19 @@ public class BankSectionLabelsPlugin extends Plugin
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
-		if (CONFIG_GROUP.equals(event.getGroup()))
+		if (!CONFIG_GROUP.equals(event.getGroup()))
 		{
-			relayout();
+			return;
 		}
+		if ("resetSections".equals(event.getKey()) && "true".equals(event.getNewValue()))
+		{
+			if (clientThread != null)
+			{
+				clientThread.invoke(this::resetOpenTab);
+			}
+			return;
+		}
+		relayout();
 	}
 
 	@Subscribe
@@ -213,37 +223,42 @@ public class BankSectionLabelsPlugin extends Plugin
 
 		int[] placed = cellByBankIndex.get(item.getIndex());
 		String target = event.getTarget();
-		int tab = currentTab();
+		int viewTab = currentTab();
+		int owner = viewTab == 0 ? SectionLayout.tabForSlot(item.getIndex(), readTabCounts()) : viewTab;
 		int itemId = normalizeId(item.getItemId());
 		if (itemId < 0)
 		{
 			return;
 		}
 
-		if (placed == null)
+		final int resetTab = placed != null ? placed[0] : owner;
+		addMenuEntry(RESET_TAB, target, () -> resetTab(resetTab));
+
+		if (placed == null || placed.length < 3 || placed[1] < 0)
 		{
-			addMenuEntry(ADD_LABEL, target, () -> promptForLabel(tab, itemId, ""));
+			addMenuEntry(ADD_LABEL, target, () -> promptForLabel(owner, itemId, ""));
 			return;
 		}
-		if (placed[1] == 0)
+		final int sectionTab = placed[0];
+		final int sectionIndex = placed[1];
+		final int cellIndex = placed[2];
+		if (cellIndex == 0)
 		{
-			final int sectionIndex = placed[0];
-			String name = sectionIndex >= 0 && sectionIndex < tabSections.size()
-				? tabSections.get(sectionIndex).getName() : "";
+			String name = sectionName(sectionTab, sectionIndex);
 			addMenuEntry(REMOVE_SECTION, target, () ->
 			{
-				saveTabSections(SectionLayout.removeSection(tabSections, sectionIndex));
+				List<SectionLayout.Section> tabSections = SectionLayout.forTab(prepared, sectionTab);
+				saveOneTab(sectionTab, SectionLayout.removeSection(tabSections, sectionIndex));
 				relayout();
 			});
-			addMenuEntry(EDIT_LABEL, target, () -> promptForLabel(tab, itemId, name));
+			addMenuEntry(EDIT_LABEL, target, () -> promptForLabel(sectionTab, itemId, name));
 		}
 		else
 		{
-			final int sectionIndex = placed[0];
-			final int cellIndex = placed[1];
 			addMenuEntry(REMOVE_FROM_SECTION, target, () ->
 			{
-				saveTabSections(SectionLayout.clearCell(tabSections, sectionIndex, cellIndex));
+				List<SectionLayout.Section> tabSections = SectionLayout.forTab(prepared, sectionTab);
+				saveOneTab(sectionTab, SectionLayout.clearCell(tabSections, sectionIndex, cellIndex));
 				relayout();
 			});
 		}
@@ -294,36 +309,42 @@ public class BankSectionLabelsPlugin extends Plugin
 		}
 
 		hideProxies(children);
+		List<SectionLayout.Section> loaded = loadSections();
+		List<SectionLayout.Section> all = SectionLayout.prepare(loaded);
+		if (!SectionLayout.encode(all).equals(SectionLayout.encode(loaded)))
+		{
+			saveSections(all);
+		}
+		prepared = all;
+
 		int tab = currentTab();
-		tabSections = SectionLayout.forTab(loadSections(), tab);
-		if (tabSections.isEmpty())
+		if (tab != 0 && SectionLayout.forTab(all, tab).isEmpty())
 		{
 			clearLayoutVisuals();
 			return;
 		}
 
 		List<Widget> items = new ArrayList<>();
+		List<Widget> separators = new ArrayList<>();
+		Map<Integer, Widget> byIndex = new HashMap<>();
 		for (Widget child : children)
 		{
-			if (child == null)
-			{
-				continue;
-			}
-			if (PROXY_NAME.equals(child.getName()))
+			if (child == null || PROXY_NAME.equals(child.getName()))
 			{
 				continue;
 			}
 			if (isItemWidget(child))
 			{
 				items.add(child);
+				byIndex.put(child.getIndex(), child);
 			}
 			else if (!child.isSelfHidden())
 			{
-				// Tab separator lines on the all-items tab would sit on top of the new grid.
-				child.setHidden(true);
+				separators.add(child);
 			}
 		}
 		items.sort(Comparator.comparingInt(Widget::getIndex));
+		separators.sort(Comparator.comparingInt(Widget::getOriginalY));
 
 		layoutColumns = detectColumns(items, container);
 		SectionLayout.Spec spec = new SectionLayout.Spec(
@@ -332,108 +353,126 @@ public class BankSectionLabelsPlugin extends Plugin
 			BankLayoutPlanner.START_X,
 			BankLayoutPlanner.COLUMN_STRIDE,
 			BankLayoutPlanner.ROW_STRIDE);
-		SectionLayout.Arrangement arranged = SectionLayout.arrange(countLoose(items, tabSections), tabSections, spec);
-		boolean[] used = new boolean[items.size()];
+
+		List<SectionLayout.BankItem> bankItems = new ArrayList<>();
+		for (Widget item : items)
+		{
+			bankItems.add(new SectionLayout.BankItem(item.getIndex(), normalizeId(item.getItemId())));
+		}
+
+		SectionLayout.BankView view;
+		if (tab == 0)
+		{
+			view = SectionLayout.layoutAll(bankItems, readTabCounts(), normalized(all), spec);
+		}
+		else
+		{
+			view = SectionLayout.layoutTab(bankItems, tab, normalized(SectionLayout.forTab(all, tab)), spec);
+			for (Widget separator : separators)
+			{
+				separator.setHidden(true);
+			}
+		}
+
 		cellByBankIndex.clear();
 		hitSlots.clear();
-		hitSlots.addAll(arranged.getCells());
-
-		for (SectionLayout.Slot slot : arranged.getCells())
+		for (SectionLayout.Placed placed : view.getPlaced())
 		{
-			if (slot.isEmpty() || slot.getItemId() < 0)
+			if (placed.isEmpty())
 			{
-				createProxy(container, slot);
+				createProxy(container, placed);
+				if (placed.inSection())
+				{
+					hitSlots.add(placed);
+				}
 				continue;
 			}
-			int match = takeMatch(items, used, slot.getItemId());
-			if (match < 0)
+			Widget widget = byIndex.get(placed.getBankIndex());
+			if (widget == null)
 			{
-				createProxy(container, slot);
 				continue;
 			}
-			placeWidget(items.get(match), slot.getX(), slot.getY());
-			cellByBankIndex.put(items.get(match).getIndex(), new int[]{slot.getSectionIndex(), slot.getCellIndex()});
-			armDrag(items.get(match));
+			placeWidget(widget, placed.getX(), placed.getY());
+			armDrag(widget);
+			if (placed.inSection())
+			{
+				cellByBankIndex.put(widget.getIndex(), new int[]{placed.getTab(), placed.getSectionIndex(), placed.getCellIndex()});
+				hitSlots.add(placed);
+			}
 		}
 
-		int looseOrdinal = 0;
-		for (int i = 0; i < items.size(); i++)
+		if (tab == 0)
 		{
-			if (used[i])
+			List<Integer> lines = view.getSeparatorY();
+			for (int i = 0; i < separators.size(); i++)
 			{
-				continue;
+				Widget separator = separators.get(i);
+				if (i < lines.size())
+				{
+					separator.setHidden(false);
+					if (separator.getOriginalY() != lines.get(i))
+					{
+						separator.setOriginalY(lines.get(i));
+						separator.revalidate();
+					}
+				}
+				else
+				{
+					separator.setHidden(true);
+				}
 			}
-			if (looseOrdinal >= arranged.getLooseSlots().size())
-			{
-				break;
-			}
-			SectionLayout.Slot slot = arranged.getLooseSlots().get(looseOrdinal++);
-			placeWidget(items.get(i), slot.getX(), slot.getY());
-			armDrag(items.get(i));
 		}
 
-		int bottom = arranged.getContentBottom() + 8;
+		int bottom = view.getContentBottom() + 8;
 		int viewport = container.getHeight();
 		container.setScrollHeight(Math.max(bottom, viewport));
 
 		List<BankSectionLabelsOverlay.SectionDraw> drawn = new ArrayList<>();
-		for (SectionLayout.Header header : arranged.getHeaders())
+		for (SectionLayout.TabHeading heading : view.getTabHeadings())
 		{
-			if (header == null || header.getName() == null)
+			drawn.add(new BankSectionLabelsOverlay.SectionDraw(
+				heading.getY(),
+				heading.getHeight(),
+				heading.getX(),
+				BankTabNames.heading(configManager, heading.getTab()),
+				true));
+		}
+		for (SectionLayout.Header header : view.getHeaders())
+		{
+			if (header == null || header.getName() == null || header.getName().isEmpty())
 			{
 				continue;
 			}
-			drawn.add(new BankSectionLabelsOverlay.SectionDraw(header.getY(), header.getHeight(), header.getX(), header.getName()));
+			drawn.add(new BankSectionLabelsOverlay.SectionDraw(header.getY(), header.getHeight(), header.getX(), header.getName(), false));
 		}
 		overlay.setSections(drawn);
-		log.debug("Placed {} section label(s) on bank tab {}", drawn.size(), tab);
+		log.debug("Placed {} heading(s) on bank tab {}", drawn.size(), tab);
 	}
 
-	private int countLoose(List<Widget> items, List<SectionLayout.Section> sections)
+	private List<SectionLayout.Section> normalized(List<SectionLayout.Section> sections)
 	{
-		boolean[] used = new boolean[items.size()];
-		if (sections != null)
+		List<SectionLayout.Section> out = new ArrayList<>();
+		if (sections == null)
 		{
-			for (SectionLayout.Section section : sections)
+			return out;
+		}
+		for (SectionLayout.Section section : sections)
+		{
+			List<Integer> cells = new ArrayList<>();
+			for (Integer id : section.getCells())
 			{
-				for (Integer itemId : section.getCells())
+				if (id == null || id < 0)
 				{
-					if (itemId == null || itemId < 0)
-					{
-						continue;
-					}
-					takeMatch(items, used, itemId);
+					cells.add(SectionLayout.EMPTY);
+				}
+				else
+				{
+					cells.add(normalizeId(id));
 				}
 			}
+			out.add(new SectionLayout.Section(section.getTab(), section.getColumns(), section.getName(), cells));
 		}
-		int loose = 0;
-		for (boolean taken : used)
-		{
-			if (!taken)
-			{
-				loose++;
-			}
-		}
-		return loose;
-	}
-
-	private int takeMatch(List<Widget> items, boolean[] used, int itemId)
-	{
-		int wanted = normalizeId(itemId);
-		for (int i = 0; i < items.size(); i++)
-		{
-			if (used[i])
-			{
-				continue;
-			}
-			Widget widget = items.get(i);
-			if (widget != null && normalizeId(widget.getItemId()) == wanted)
-			{
-				used[i] = true;
-				return i;
-			}
-		}
-		return -1;
+		return out;
 	}
 
 	private void updateScrollbar(int generation)
@@ -479,40 +518,37 @@ public class BankSectionLabelsPlugin extends Plugin
 		{
 			return;
 		}
+		final int columns = layoutColumns;
 		chatboxPanelManager.openTextInput("Section label (leave empty to remove)")
 			.value(initial == null ? "" : initial)
 			.onDone(value ->
 			{
-				try
+				// Chatbox onDone is not the client thread. Item lookups and the
+				// bank widgets have to run there.
+				if (clientThread == null)
 				{
-					String text = SectionLabels.sanitize(value);
-					List<SectionLayout.Section> all = loadSections();
-					List<SectionLayout.Section> tabSectionsNow = SectionLayout.forTab(all, tab);
-					int existing = sectionWithHead(tabSectionsNow, itemId);
-					if (text.isEmpty())
-					{
-						if (existing >= 0)
-						{
-							tabSectionsNow = SectionLayout.removeSection(tabSectionsNow, existing);
-						}
-					}
-					else if (existing >= 0)
-					{
-						tabSectionsNow = SectionLayout.rename(tabSectionsNow, existing, text);
-					}
-					else
-					{
-						tabSectionsNow = SectionLayout.addSection(tabSectionsNow, tab, text, layoutColumns, itemId);
-					}
-					saveSections(SectionLayout.replaceTab(all, tab, tabSectionsNow));
-					relayout();
+					return;
 				}
-				catch (RuntimeException ex)
-				{
-					log.warn("Could not save section label", ex);
-				}
+				clientThread.invoke(() -> applyLabel(tab, itemId, columns, value));
 			})
 			.build();
+	}
+
+	private void applyLabel(int tab, int itemId, int columns, String value)
+	{
+		try
+		{
+			List<SectionLayout.Section> all = SectionLayout.prepare(loadSections());
+			List<SectionLayout.Section> tabSections = SectionLayout.forTab(all, tab);
+			tabSections = SectionLayout.labelItem(tabSections, tab, value, columns, itemId);
+			prepared = SectionLayout.replaceTab(all, tab, tabSections);
+			saveSections(prepared);
+			relayout();
+		}
+		catch (RuntimeException ex)
+		{
+			log.warn("Could not save section label", ex);
+		}
 	}
 
 	private void onDragComplete(ScriptEvent event)
@@ -537,6 +573,12 @@ public class BankSectionLabelsPlugin extends Plugin
 			{
 				return;
 			}
+			int viewTab = currentTab();
+			int sourceTab = viewTab == 0 ? SectionLayout.tabForSlot(source.getIndex(), readTabCounts()) : viewTab;
+			if (sourceTab != destination[0])
+			{
+				return;
+			}
 			long now = System.nanoTime();
 			if (now - handledDropNanos < 200_000_000L)
 			{
@@ -547,14 +589,15 @@ public class BankSectionLabelsPlugin extends Plugin
 			client.setDraggedOnWidget(null);
 
 			int[] sourceCell = cellByBankIndex.get(source.getIndex());
-			int sourceSection = sourceCell == null ? -1 : sourceCell[0];
-			int sourceIndex = sourceCell == null ? -1 : sourceCell[1];
+			int sourceSection = sourceCell == null || sourceCell.length < 3 ? -1 : sourceCell[1];
+			int sourceIndex = sourceCell == null || sourceCell.length < 3 ? -1 : sourceCell[2];
 			int sourceItem = normalizeId(source.getItemId());
 			if (sourceItem < 0)
 			{
 				return;
 			}
-			saveTabSections(SectionLayout.drop(tabSections, sourceSection, sourceIndex, sourceItem, destination[0], destination[1]));
+			List<SectionLayout.Section> tabSections = SectionLayout.forTab(prepared, destination[0]);
+			saveOneTab(destination[0], SectionLayout.drop(tabSections, sourceSection, sourceIndex, sourceItem, destination[1], destination[2]));
 			relayout();
 		}
 		catch (RuntimeException ex)
@@ -594,16 +637,16 @@ public class BankSectionLabelsPlugin extends Plugin
 		}
 		int localX = mouse.getX() - origin.getX();
 		int localY = mouse.getY() - origin.getY() + container.getScrollY();
-		for (SectionLayout.Slot slot : hitSlots)
+		for (SectionLayout.Placed slot : hitSlots)
 		{
-			if (slot.getSectionIndex() < 0)
+			if (!slot.inSection())
 			{
 				continue;
 			}
 			if (localX >= slot.getX() && localX < slot.getX() + BankLayoutPlanner.COLUMN_STRIDE
 				&& localY >= slot.getY() && localY < slot.getY() + BankLayoutPlanner.ROW_STRIDE)
 			{
-				return new int[]{slot.getSectionIndex(), slot.getCellIndex()};
+				return new int[]{slot.getTab(), slot.getSectionIndex(), slot.getCellIndex()};
 			}
 		}
 		return null;
@@ -703,11 +746,69 @@ public class BankSectionLabelsPlugin extends Plugin
 		configManager.setRSProfileConfiguration(CONFIG_GROUP, LABELS_KEY, SectionLayout.encode(sections));
 	}
 
-	private void saveTabSections(List<SectionLayout.Section> updatedTab)
+	private void saveOneTab(int tab, List<SectionLayout.Section> updatedTab)
 	{
-		int tab = currentTab();
-		saveSections(SectionLayout.replaceTab(loadSections(), tab, updatedTab));
-		tabSections = updatedTab == null ? new ArrayList<>() : updatedTab;
+		prepared = SectionLayout.replaceTab(prepared == null || prepared.isEmpty() ? loadSections() : prepared, tab, updatedTab);
+		saveSections(prepared);
+	}
+
+	private void resetOpenTab()
+	{
+		try
+		{
+			resetTab(currentTab());
+			if (configManager != null)
+			{
+				configManager.setConfiguration(CONFIG_GROUP, "resetSections", false);
+			}
+		}
+		catch (RuntimeException ex)
+		{
+			log.warn("Could not reset section labels", ex);
+		}
+	}
+
+	private void resetTab(int tab)
+	{
+		List<SectionLayout.Section> all = SectionLayout.prepare(loadSections());
+		prepared = SectionLayout.replaceTab(all, tab, Collections.emptyList());
+		saveSections(prepared);
+		relayout();
+	}
+
+	private String sectionName(int tab, int sectionIndex)
+	{
+		List<SectionLayout.Section> tabSections = SectionLayout.forTab(prepared, tab);
+		if (sectionIndex < 0 || sectionIndex >= tabSections.size())
+		{
+			return "";
+		}
+		return tabSections.get(sectionIndex).getName();
+	}
+
+	private int[] readTabCounts()
+	{
+		int[] counts = new int[9];
+		if (client == null)
+		{
+			return counts;
+		}
+		int[] varbits = {
+			VarbitID.BANK_TAB_1,
+			VarbitID.BANK_TAB_2,
+			VarbitID.BANK_TAB_3,
+			VarbitID.BANK_TAB_4,
+			VarbitID.BANK_TAB_5,
+			VarbitID.BANK_TAB_6,
+			VarbitID.BANK_TAB_7,
+			VarbitID.BANK_TAB_8,
+			VarbitID.BANK_TAB_9
+		};
+		for (int i = 0; i < varbits.length; i++)
+		{
+			counts[i] = Math.max(0, client.getVarbitValue(varbits[i]));
+		}
+		return counts;
 	}
 
 	private void relayout()
@@ -793,7 +894,10 @@ public class BankSectionLabelsPlugin extends Plugin
 	{
 		cellByBankIndex.clear();
 		hitSlots.clear();
-		overlay.setSections(Collections.emptyList());
+		if (overlay != null)
+		{
+			overlay.setSections(Collections.emptyList());
+		}
 	}
 
 	private void hideProxies(Widget[] children)
@@ -826,7 +930,7 @@ public class BankSectionLabelsPlugin extends Plugin
 		proxyCells.clear();
 	}
 
-	private void createProxy(Widget container, SectionLayout.Slot slot)
+	private void createProxy(Widget container, SectionLayout.Placed slot)
 	{
 		if (container == null || slot == null)
 		{
@@ -851,7 +955,7 @@ public class BankSectionLabelsPlugin extends Plugin
 		proxy.setOnDragCompleteListener((JavaScriptCallback) this::onDragComplete);
 		proxy.revalidate();
 		proxies.add(proxy);
-		proxyCells.put(proxy, new int[]{slot.getSectionIndex(), slot.getCellIndex()});
+		proxyCells.put(proxy, new int[]{slot.getTab(), slot.getSectionIndex(), slot.getCellIndex()});
 	}
 
 	private void placeWidget(Widget widget, int x, int y)
@@ -875,23 +979,6 @@ public class BankSectionLabelsPlugin extends Plugin
 			return;
 		}
 		widget.setOnDragCompleteListener((JavaScriptCallback) this::onDragComplete);
-	}
-
-	private int sectionWithHead(List<SectionLayout.Section> sections, int itemId)
-	{
-		if (sections == null)
-		{
-			return -1;
-		}
-		for (int i = 0; i < sections.size(); i++)
-		{
-			List<Integer> cells = sections.get(i).getCells();
-			if (!cells.isEmpty() && cells.get(0) != null && normalizeId(cells.get(0)) == itemId)
-			{
-				return i;
-			}
-		}
-		return -1;
 	}
 
 	private int detectColumns(List<Widget> items, Widget container)

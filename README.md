@@ -18,7 +18,8 @@ The grid is saved per account. It does not depend on the order of items in the r
 
 ### What a label sticks to
 
-- Each normal bank tab has its own sections. The main all-items view is tab 0 and is separate from tabs 1–9.
+- A section belongs to the vanilla tab the item is in. Building it on tab 2 and editing it from the all-items view changes the same section.
+- On the all-items view, untabbed items stay at the top. Each numbered tab then gets a bold yellow-orange title (`2 Melee`, or `Tab 2` if Bank Tab Names has no name for it), then that tab's loose items, then its smaller orange section labels and grids.
 - A placeholder of an item counts as that item, so a section still shows the item if a placeholder is all you have.
 - While bank search is open, headings are hidden and the bank is left as the game drew it.
 - Bank Tags tag tabs, Bank Tag Layouts, and the potion storage are left alone.
@@ -33,8 +34,10 @@ Labels are saved per account with RuneLite’s profile config, so they come back
 | Require Shift for label menu | Hide the add/edit/remove options unless Shift is held |
 | Label color | Text and divider color. Alpha is supported |
 | Font | Any RuneLite font, including the RuneScape fonts |
-| Divider line | A line under the heading, just above the items |
+| Divider line | A thin line under the heading. Off leaves text only |
 | Header height | How many pixels of space are inserted above the labeled row |
+| Header background | A dark bar behind headings. Off by default |
+| Reset open tab's sections | Deletes the sections for the tab you are viewing, then turns itself off. On the all-items view this clears only untabbed sections. Shift-right-click an item and choose **Reset section labels for this tab** to clear the tab that item belongs to |
 
 If a font is clipped, raise the header height. The default (24px) fits the bold RuneScape font.
 
@@ -46,11 +49,11 @@ If a Bank Tags tag tab or a Bank Tag Layout is open, the plugin does not move an
 
 ## Limitations
 
-- Headings are per vanilla tab. A label made on tab 6 does not also appear on the all-items tab. Add it there separately if you want it in both views.
 - Search, Bank Tags tag tabs, and potion storage hide the headings. If a tag tab is open, items are not shifted.
 - Duplicate item ids are told apart by visual order. Withdrawing an earlier copy of the same item makes a later copy take its place in that count. Labeling a unique item (the usual section start) does not have this problem.
 - A Bank Tags tag tab, or a Bank Tag Layout that is turned on, is left alone. Open a regular bank tab to edit sections.
-- The all-items tab hides the game’s “Tab 1” separator lines while you have sections, so the headings are not drawn on top of those lines.
+- Tab titles use the name from the Bank Tab Names plugin when that plugin has one saved (`banktabnames` / `text_N`, or the older `BankTabNames` / `tabNName`). Otherwise the title is `Tab N`.
+- Headings are plain text inside the item area. They do not draw a dark bar unless Header background is turned on, and they do not extend over the tab-icon column.
 - Clicks in the empty gap hit the bank background, not an item. Clicks on the items themselves still withdraw and deposit.
 - Another plugin that moves bank item widgets later in the same frame can fight this one. This plugin runs after the normal bank build and after Bank Tags’ layout pass.
 - Very large header heights, or a heading on many rows, make the bank scroll further. That is the inserted space.

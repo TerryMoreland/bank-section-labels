@@ -27,7 +27,11 @@ package com.banksectionlabels;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 
 /**
  * Positional section grids for one bank tab.
@@ -39,6 +43,12 @@ import java.util.List;
 public final class SectionLayout
 {
 	public static final int EMPTY = -1;
+
+	/** Space above the first heading so it is not glued to the top of the item box. */
+	public static final int TOP_INSET = 8;
+
+	/** Vertical band for a numbered-tab title on the all-items view. */
+	public static final int TAB_HEADING_HEIGHT = 28;
 
 	private SectionLayout()
 	{
@@ -177,19 +187,26 @@ public final class SectionLayout
 
 	public static final class Header
 	{
+		private final int tab;
 		private final int sectionIndex;
 		private final String name;
 		private final int x;
 		private final int y;
 		private final int height;
 
-		Header(int sectionIndex, String name, int x, int y, int height)
+		Header(int tab, int sectionIndex, String name, int x, int y, int height)
 		{
+			this.tab = tab;
 			this.sectionIndex = sectionIndex;
 			this.name = name;
 			this.x = x;
 			this.y = y;
 			this.height = height;
+		}
+
+		public int getTab()
+		{
+			return tab;
 		}
 
 		public int getSectionIndex()
@@ -412,11 +429,16 @@ public final class SectionLayout
 
 	public static Arrangement arrange(int looseCount, List<Section> sections, Spec spec)
 	{
+		return arrangeFrom(looseCount, sections, spec, TOP_INSET);
+	}
+
+	public static Arrangement arrangeFrom(int looseCount, List<Section> sections, Spec spec, int startY)
+	{
 		List<Slot> loose = new ArrayList<>();
 		List<Slot> cells = new ArrayList<>();
 		List<Header> headers = new ArrayList<>();
 		int columns = spec.columns;
-		int y = 0;
+		int y = Math.max(0, startY);
 		int looseIndex = 0;
 		while (looseIndex < looseCount)
 		{
@@ -448,7 +470,7 @@ public final class SectionLayout
 				boolean lastFull = stored > 0 && stored % cols == 0 && lastRowOccupied(section, cols);
 				int rows = occupiedRows + (lastFull ? 1 : 0);
 				int headerY = y;
-				headers.add(new Header(s, section.name, spec.startX, headerY, spec.headerHeight));
+				headers.add(new Header(section.tab, s, section.name, spec.startX, headerY, spec.headerHeight));
 				int itemY = headerY + spec.headerHeight;
 				for (int row = 0; row < rows; row++)
 				{
@@ -733,5 +755,559 @@ public final class SectionLayout
 	public static boolean sameCells(Section section, Integer... expected)
 	{
 		return section.cells.equals(Arrays.asList(expected));
+	}
+
+	/**
+	 * One drawn item or empty cell. {@code bankIndex} is the real bank slot, or -1 for an empty proxy.
+	 * {@code sectionIndex} is the index inside that vanilla tab's section list.
+	 */
+	public static final class Placed
+	{
+		private final int bankIndex;
+		private final int tab;
+		private final int sectionIndex;
+		private final int cellIndex;
+		private final int x;
+		private final int y;
+		private final boolean empty;
+
+		Placed(int bankIndex, int tab, int sectionIndex, int cellIndex, int x, int y, boolean empty)
+		{
+			this.bankIndex = bankIndex;
+			this.tab = tab;
+			this.sectionIndex = sectionIndex;
+			this.cellIndex = cellIndex;
+			this.x = x;
+			this.y = y;
+			this.empty = empty;
+		}
+
+		public int getBankIndex()
+		{
+			return bankIndex;
+		}
+
+		public int getTab()
+		{
+			return tab;
+		}
+
+		public int getSectionIndex()
+		{
+			return sectionIndex;
+		}
+
+		public int getCellIndex()
+		{
+			return cellIndex;
+		}
+
+		public int getX()
+		{
+			return x;
+		}
+
+		public int getY()
+		{
+			return y;
+		}
+
+		public boolean isEmpty()
+		{
+			return empty;
+		}
+
+		public boolean inSection()
+		{
+			return sectionIndex >= 0;
+		}
+	}
+
+	/** Bold title drawn once above a numbered tab's block on the all-items view. */
+	public static final class TabHeading
+	{
+		private final int tab;
+		private final int x;
+		private final int y;
+		private final int height;
+
+		TabHeading(int tab, int x, int y, int height)
+		{
+			this.tab = tab;
+			this.x = x;
+			this.y = y;
+			this.height = height;
+		}
+
+		public int getTab()
+		{
+			return tab;
+		}
+
+		public int getX()
+		{
+			return x;
+		}
+
+		public int getY()
+		{
+			return y;
+		}
+
+		public int getHeight()
+		{
+			return height;
+		}
+	}
+
+	public static final class BankView
+	{
+		private final List<Placed> placed;
+		private final List<Header> headers;
+		private final List<TabHeading> tabHeadings;
+		private final int contentBottom;
+		private final List<Integer> separatorY;
+
+		BankView(List<Placed> placed, List<Header> headers, List<TabHeading> tabHeadings, int contentBottom, List<Integer> separatorY)
+		{
+			this.placed = placed;
+			this.headers = headers;
+			this.tabHeadings = tabHeadings;
+			this.contentBottom = contentBottom;
+			this.separatorY = separatorY;
+		}
+
+		public List<Placed> getPlaced()
+		{
+			return placed;
+		}
+
+		public List<Header> getHeaders()
+		{
+			return headers;
+		}
+
+		public List<TabHeading> getTabHeadings()
+		{
+			return tabHeadings;
+		}
+
+		public int getContentBottom()
+		{
+			return contentBottom;
+		}
+
+		public List<Integer> getSeparatorY()
+		{
+			return separatorY;
+		}
+	}
+
+	/**
+	 * Which vanilla tab owns a slot on the all-items view. {@code tabCounts[0]} is tab 1.
+	 * Anything past the numbered tabs is untabbed (tab 0).
+	 */
+	public static int tabForSlot(int slot, int[] tabCounts)
+	{
+		if (slot < 0 || tabCounts == null)
+		{
+			return 0;
+		}
+		int start = 0;
+		int limit = Math.min(9, tabCounts.length);
+		for (int i = 0; i < limit; i++)
+		{
+			int count = Math.max(0, tabCounts[i]);
+			if (slot < start + count)
+			{
+				return i + 1;
+			}
+			start += count;
+		}
+		return 0;
+	}
+
+	/**
+	 * Layout for one open numbered tab. Every supplied item belongs to {@code tab}.
+	 */
+	public static BankView layoutTab(List<BankItem> items, int tab, List<Section> sections, Spec spec)
+	{
+		List<BankItem> block = items == null ? new ArrayList<BankItem>() : new ArrayList<>(items);
+		Collections.sort(block, Comparator.comparingInt(item -> item.bankIndex));
+		return layoutBlock(block, tab, dedupe(sections), spec, TOP_INSET);
+	}
+
+	/**
+	 * All-items view, in the order the game draws it: untabbed items first, then tab 1,
+	 * tab 2, and so on. Slot indexes are still tab 1, then tab 2, with the untabbed
+	 * remainder at the end. Each numbered block gets a tab title, then that tab's
+	 * loose items, then its sections. Tab 0 sections apply only to the untabbed items.
+	 */
+	public static BankView layoutAll(List<BankItem> items, int[] tabCounts, List<Section> sections, Spec spec)
+	{
+		List<Placed> placed = new ArrayList<>();
+		List<Header> headers = new ArrayList<>();
+		List<TabHeading> tabHeadings = new ArrayList<>();
+		List<Integer> breaks = new ArrayList<>();
+		int y = TOP_INSET;
+		boolean any = false;
+		int[] order = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+		for (int tab : order)
+		{
+			List<BankItem> block = new ArrayList<>();
+			if (items != null)
+			{
+				for (BankItem item : items)
+				{
+					if (tabForSlot(item.bankIndex, tabCounts) == tab)
+					{
+						block.add(item);
+					}
+				}
+			}
+			if (block.isEmpty())
+			{
+				continue;
+			}
+			Collections.sort(block, Comparator.comparingInt(item -> item.bankIndex));
+			if (tab != 0)
+			{
+				if (any)
+				{
+					y += 4;
+				}
+				tabHeadings.add(new TabHeading(tab, spec.startX, y, TAB_HEADING_HEIGHT));
+				breaks.add(y + TAB_HEADING_HEIGHT - 2);
+				y += TAB_HEADING_HEIGHT;
+			}
+			any = true;
+			BankView part = layoutBlock(block, tab, dedupe(forTab(sections, tab)), spec, y);
+			placed.addAll(part.placed);
+			headers.addAll(part.headers);
+			y = part.contentBottom;
+		}
+		return new BankView(placed, headers, tabHeadings, y, breaks);
+	}
+
+	private static BankView layoutBlock(List<BankItem> block, int tab, List<Section> sections, Spec spec, int startY)
+	{
+		boolean[] used = new boolean[block.size()];
+		List<int[]> cellMatches = new ArrayList<>();
+		for (int s = 0; s < sections.size(); s++)
+		{
+			Section section = sections.get(s);
+			int[] matches = new int[section.cells.size()];
+			Arrays.fill(matches, -1);
+			for (int c = 0; c < section.cells.size(); c++)
+			{
+				int id = section.cells.get(c);
+				if (id < 0)
+				{
+					continue;
+				}
+				for (int i = 0; i < block.size(); i++)
+				{
+					if (!used[i] && block.get(i).itemId == id)
+					{
+						used[i] = true;
+						matches[c] = i;
+						break;
+					}
+				}
+			}
+			cellMatches.add(matches);
+		}
+		int looseCount = 0;
+		for (boolean taken : used)
+		{
+			if (!taken)
+			{
+				looseCount++;
+			}
+		}
+		Arrangement arranged = arrangeFrom(looseCount, sections, spec, startY);
+		List<Placed> placed = new ArrayList<>();
+		int looseOrdinal = 0;
+		for (int i = 0; i < block.size(); i++)
+		{
+			if (used[i])
+			{
+				continue;
+			}
+			if (looseOrdinal >= arranged.looseSlots.size())
+			{
+				break;
+			}
+			Slot slot = arranged.looseSlots.get(looseOrdinal++);
+			placed.add(new Placed(block.get(i).bankIndex, tab, -1, -1, slot.x, slot.y, false));
+		}
+		for (Slot slot : arranged.cells)
+		{
+			if (slot.empty || slot.sectionIndex < 0 || slot.sectionIndex >= cellMatches.size())
+			{
+				placed.add(new Placed(-1, tab, slot.sectionIndex, slot.cellIndex, slot.x, slot.y, true));
+				continue;
+			}
+			int[] matches = cellMatches.get(slot.sectionIndex);
+			int item = slot.cellIndex >= 0 && slot.cellIndex < matches.length ? matches[slot.cellIndex] : -1;
+			if (item < 0)
+			{
+				placed.add(new Placed(-1, tab, slot.sectionIndex, slot.cellIndex, slot.x, slot.y, true));
+			}
+			else
+			{
+				placed.add(new Placed(block.get(item).bankIndex, tab, slot.sectionIndex, slot.cellIndex, slot.x, slot.y, false));
+			}
+		}
+		return new BankView(placed, arranged.headers, Collections.emptyList(), arranged.contentBottom, Collections.emptyList());
+	}
+
+	/**
+	 * Collapse sections in the same tab that share a name or the same head item.
+	 * The copy with more filled cells is kept.
+	 */
+	public static List<Section> dedupe(List<Section> sections)
+	{
+		List<Section> out = new ArrayList<>();
+		if (sections == null)
+		{
+			return out;
+		}
+		for (Section section : sections)
+		{
+			int found = -1;
+			for (int i = 0; i < out.size(); i++)
+			{
+				if (out.get(i).tab == section.tab && (sameName(out.get(i), section) || sameHead(out.get(i), section)))
+				{
+					found = i;
+					break;
+				}
+			}
+			if (found < 0)
+			{
+				out.add(section.copy());
+			}
+			else
+			{
+				out.set(found, richer(out.get(found), section));
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * Drop tab 0 copies that repeat a numbered tab's section name or head item.
+	 * Those copies were written when the all-items view used its own sections.
+	 */
+	public static List<Section> dropTabZeroDuplicates(List<Section> sections)
+	{
+		List<Section> source = sections == null ? new ArrayList<Section>() : sections;
+		Set<String> names = new HashSet<>();
+		Set<Integer> heads = new HashSet<>();
+		for (Section section : source)
+		{
+			if (section.tab <= 0)
+			{
+				continue;
+			}
+			names.add(normalizedName(section.name));
+			int head = headId(section);
+			if (head >= 0)
+			{
+				heads.add(head);
+			}
+		}
+		List<Section> out = new ArrayList<>();
+		for (Section section : source)
+		{
+			if (section.tab == 0
+				&& (names.contains(normalizedName(section.name)) || heads.contains(headId(section))))
+			{
+				continue;
+			}
+			out.add(section.copy());
+		}
+		return out;
+	}
+
+	public static List<Section> prepare(List<Section> sections)
+	{
+		return dropTabZeroDuplicates(dedupe(sections));
+	}
+
+	/**
+	 * Add or edit a heading. An item that already heads a section is renamed.
+	 * A name that already exists absorbs the item instead of creating a second section.
+	 * An empty name removes the section that item heads.
+	 */
+	public static List<Section> labelItem(List<Section> tabSections, int tab, String name, int columns, int itemId)
+	{
+		List<Section> sections = copyOf(tabSections);
+		String clean = SectionLabels.sanitize(name);
+		int byHead = indexWithHead(sections, itemId);
+		int byName = indexWithName(sections, clean);
+		if (clean.isEmpty())
+		{
+			if (byHead >= 0)
+			{
+				return removeSection(sections, byHead);
+			}
+			return sections;
+		}
+		if (byHead >= 0)
+		{
+			if (byName >= 0 && byName != byHead)
+			{
+				sections = removeSection(sections, byHead);
+				int target = indexWithName(sections, clean);
+				if (containsItem(sections.get(target), itemId))
+				{
+					return sections;
+				}
+				return drop(sections, -1, -1, itemId, target, firstEmptyOrGrow(sections.get(target)));
+			}
+			return rename(sections, byHead, clean);
+		}
+		sections = stripItem(sections, itemId);
+		byName = indexWithName(sections, clean);
+		if (byName >= 0)
+		{
+			if (containsItem(sections.get(byName), itemId))
+			{
+				return sections;
+			}
+			return drop(sections, -1, -1, itemId, byName, firstEmptyOrGrow(sections.get(byName)));
+		}
+		return addSection(sections, tab, clean, columns, itemId);
+	}
+
+	private static List<Section> stripItem(List<Section> sections, int itemId)
+	{
+		if (itemId < 0)
+		{
+			return sections;
+		}
+		for (Section section : sections)
+		{
+			for (int i = 0; i < section.cells.size(); i++)
+			{
+				if (section.cells.get(i) == itemId)
+				{
+					section.cells.set(i, EMPTY);
+				}
+			}
+		}
+		return sections;
+	}
+
+	private static int firstEmptyOrGrow(Section section)
+	{
+		int empty = firstEmpty(section);
+		return empty >= 0 ? empty : section.cells.size();
+	}
+
+	private static boolean containsItem(Section section, int itemId)
+	{
+		for (int id : section.cells)
+		{
+			if (id == itemId)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static int indexWithHead(List<Section> sections, int itemId)
+	{
+		if (itemId < 0)
+		{
+			return -1;
+		}
+		for (int i = 0; i < sections.size(); i++)
+		{
+			if (headId(sections.get(i)) == itemId)
+			{
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	private static int indexWithName(List<Section> sections, String name)
+	{
+		if (name == null || name.isEmpty())
+		{
+			return -1;
+		}
+		String key = normalizedName(name);
+		for (int i = 0; i < sections.size(); i++)
+		{
+			if (normalizedName(sections.get(i).name).equals(key))
+			{
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	private static boolean sameName(Section left, Section right)
+	{
+		return normalizedName(left.name).equals(normalizedName(right.name));
+	}
+
+	private static boolean sameHead(Section left, Section right)
+	{
+		int a = headId(left);
+		int b = headId(right);
+		return a >= 0 && a == b;
+	}
+
+	private static int headId(Section section)
+	{
+		if (section.cells.isEmpty())
+		{
+			return -1;
+		}
+		int id = section.cells.get(0);
+		return id < 0 ? -1 : id;
+	}
+
+	private static String normalizedName(String name)
+	{
+		return name == null ? "" : name.trim().toLowerCase(Locale.ENGLISH);
+	}
+
+	private static Section richer(Section left, Section right)
+	{
+		int leftFilled = filled(left);
+		int rightFilled = filled(right);
+		if (rightFilled > leftFilled)
+		{
+			return right.copy();
+		}
+		if (leftFilled > rightFilled)
+		{
+			return left.copy();
+		}
+		if (headId(left) < 0 && headId(right) >= 0)
+		{
+			return right.copy();
+		}
+		return left.copy();
+	}
+
+	private static int filled(Section section)
+	{
+		int n = 0;
+		for (int id : section.cells)
+		{
+			if (id >= 0)
+			{
+				n++;
+			}
+		}
+		return n;
 	}
 }

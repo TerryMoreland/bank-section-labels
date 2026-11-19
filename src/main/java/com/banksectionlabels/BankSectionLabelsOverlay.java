@@ -101,16 +101,16 @@ class BankSectionLabelsOverlay extends Overlay
 			font = FontManager.getRunescapeSmallFont();
 		}
 		graphics.setFont(font);
-		FontMetrics metrics = graphics.getFontMetrics();
 		int header = config.headerHeight();
 		Color color = config.labelColor();
+		Rectangle itemArea = itemArea(viewport);
 		Shape previousClip = graphics.getClip();
-		graphics.clip(viewport);
+		graphics.setClip(itemArea);
 		try
 		{
 			for (SectionDraw section : drawn)
 			{
-				drawSection(graphics, metrics, viewport, container, header, color, section);
+				drawSection(graphics, font, viewport, itemArea, container, header, color, section);
 			}
 		}
 		finally
@@ -120,7 +120,30 @@ class BankSectionLabelsOverlay extends Overlay
 		return null;
 	}
 
-	private void drawSection(Graphics2D graphics, FontMetrics metrics, Rectangle viewport, Widget container, int header, Color color, SectionDraw section)
+	/**
+	 * The item container's canvas box starts left of the icons and covers the
+	 * bank's tab-icon column. Headings stay inside the icon area.
+	 */
+	private static Rectangle itemArea(Rectangle viewport)
+	{
+		int left = viewport.x + BankLayoutPlanner.START_X - 2;
+		int right = viewport.x + viewport.width - 8;
+		if (left < viewport.x)
+		{
+			left = viewport.x;
+		}
+		if (right > viewport.x + viewport.width)
+		{
+			right = viewport.x + viewport.width;
+		}
+		if (right <= left + 16)
+		{
+			return new Rectangle(viewport);
+		}
+		return new Rectangle(left, viewport.y, right - left, viewport.height);
+	}
+
+	private void drawSection(Graphics2D graphics, Font baseFont, Rectangle viewport, Rectangle itemArea, Widget container, int header, Color color, SectionDraw section)
 	{
 		if (section == null || section.text == null || container == null)
 		{
@@ -142,27 +165,47 @@ class BankSectionLabelsOverlay extends Overlay
 
 		int scroll = container.getScrollY();
 		int top = origin.getY() + section.containerY - scroll;
+		if (top + section.height < viewport.y || top > viewport.y + viewport.height)
+		{
+			return;
+		}
 		int gap = section.height > 0 ? section.height : header;
-		// Stop two pixels short of the item row so the bar cannot cover icons.
-		int barHeight = Math.max(1, gap - 2);
-		int barX = viewport.x + 4;
-		int barW = Math.max(1, viewport.width - 8);
-		graphics.setColor(new Color(12, 10, 8, 220));
-		graphics.fillRect(barX, top, barW, barHeight);
+		int band = Math.max(1, gap - 2);
+		Font useFont = baseFont;
+		Color useColor = color;
+		if (section.tabTitle)
+		{
+			float size = Math.min(20f, baseFont.getSize2D() + 3f);
+			useFont = baseFont.deriveFont(Font.BOLD, size);
+			useColor = new Color(255, 186, 48);
+		}
+		graphics.setFont(useFont);
+		FontMetrics metrics = graphics.getFontMetrics();
 
-		int baseline = top + (barHeight - metrics.getHeight()) / 2 + metrics.getAscent();
+		if (config.headerBackground())
+		{
+			graphics.setColor(new Color(12, 10, 8, 200));
+			graphics.fillRect(itemArea.x, top, itemArea.width, band);
+		}
+
+		int baseline = top + (band - metrics.getHeight()) / 2 + metrics.getAscent();
 		int textX = origin.getX() + section.textX;
+		if (textX < itemArea.x)
+		{
+			textX = itemArea.x;
+		}
 
 		graphics.setColor(new Color(0, 0, 0, 220));
 		graphics.drawString(section.text, textX + 1, baseline + 1);
-		graphics.setColor(color);
+		graphics.setColor(useColor);
 		graphics.drawString(section.text, textX, baseline);
 
 		if (config.divider())
 		{
-			int lineY = top + barHeight - 1;
-			graphics.setColor(color);
-			graphics.drawLine(barX, lineY, barX + barW, lineY);
+			int lineY = top + band - 1;
+			Color line = section.tabTitle ? new Color(255, 186, 48, 170) : new Color(useColor.getRed(), useColor.getGreen(), useColor.getBlue(), 150);
+			graphics.setColor(line);
+			graphics.drawLine(itemArea.x, lineY, itemArea.x + itemArea.width - 1, lineY);
 		}
 	}
 
@@ -172,13 +215,15 @@ class BankSectionLabelsOverlay extends Overlay
 		final int height;
 		final int textX;
 		final String text;
+		final boolean tabTitle;
 
-		SectionDraw(int containerY, int height, int textX, String text)
+		SectionDraw(int containerY, int height, int textX, String text, boolean tabTitle)
 		{
 			this.containerY = containerY;
 			this.height = height;
 			this.textX = textX;
 			this.text = text;
+			this.tabTitle = tabTitle;
 		}
 	}
 }

@@ -84,12 +84,34 @@ public interface BankSectionLabelsConfig extends Config
 	@ConfigItem(
 		keyName = "divider",
 		name = "Divider line",
-		description = "Draw a horizontal line under each heading, just above the item row",
+		description = "Draw a thin line under each heading. There is no filled bar unless Header background is on",
 		position = 4
 	)
 	default boolean divider()
 	{
 		return true;
+	}
+
+	@ConfigItem(
+		keyName = "headerBackground",
+		name = "Header background",
+		description = "Draw a dark bar behind headings. Off leaves plain text, which is the default",
+		position = 6
+	)
+	default boolean headerBackground()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "resetSections",
+		name = "Reset open tab's sections",
+		description = "Turn on to delete every section in the bank tab you are viewing. On the all-items view this clears only untabbed sections. Turns itself off",
+		position = 7
+	)
+	default boolean resetSections()
+	{
+		return false;
 	}
 
 	@Range(min = 14, max = 48)

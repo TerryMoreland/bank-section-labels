@@ -24,6 +24,7 @@
  */
 package com.banksectionlabels;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -74,7 +75,7 @@ public class SectionLayoutTest
 		SectionLayout.Slot first = cell(arranged, 0);
 		assertEquals(header.getY() + header.getHeight(), first.getY());
 		assertTrue(first.getY() >= header.getY() + 24);
-		assertEquals(0, arranged.getLooseSlots().get(0).getY());
+		assertEquals(SectionLayout.TOP_INSET, arranged.getLooseSlots().get(0).getY());
 		assertTrue(header.getY() >= arranged.getLooseSlots().get(2).getY() + BankLayoutPlanner.ROW_STRIDE);
 	}
 
@@ -89,7 +90,7 @@ public class SectionLayoutTest
 
 		int firstY = cell(arranged, 0, 0).getY();
 		int secondY = cell(arranged, 1, 0).getY();
-		assertEquals(20, firstY);
+		assertEquals(SectionLayout.TOP_INSET + 20, firstY);
 		assertTrue(secondY >= firstY + BankLayoutPlanner.ROW_STRIDE + 20);
 		assertEquals("Woodcutting", arranged.getHeaders().get(0).getName());
 		assertEquals("Mining", arranged.getHeaders().get(1).getName());
@@ -164,6 +165,111 @@ public class SectionLayoutTest
 		assertEquals(sections.get(0).getCells(), decoded.get(0).getCells());
 	}
 
+	@Test
+	public void labelingEditsTheSameSectionAndSurvivesReopen()
+	{
+		List<SectionLayout.Section> sections = SectionLayout.labelItem(Collections.emptyList(), 1, "Woodcutting", 8, TINDERBOX);
+		sections = SectionLayout.drop(sections, -1, -1, 1521, 0, 1);
+		sections = SectionLayout.drop(sections, -1, -1, LOGS, 0, 0);
+		sections = SectionLayout.decode(SectionLayout.encode(sections));
+
+		assertEquals(1, sections.size());
+		assertEquals(Integer.valueOf(TINDERBOX), sections.get(0).getCells().get(0));
+		assertEquals(Integer.valueOf(1521), sections.get(0).getCells().get(1));
+		assertEquals(Integer.valueOf(LOGS), sections.get(0).getCells().get(2));
+
+		sections = SectionLayout.labelItem(sections, 1, "Mining", 8, 1265);
+		assertEquals(2, sections.size());
+
+		sections = SectionLayout.labelItem(sections, 1, "Rocks", 8, 1265);
+		assertEquals(2, sections.size());
+		assertEquals("Rocks", sections.get(1).getName());
+		assertEquals(Integer.valueOf(1265), sections.get(1).getCells().get(0));
+
+		sections = SectionLayout.labelItem(sections, 1, "Rocks", 8, 999);
+		assertEquals(2, sections.size());
+		assertEquals(Integer.valueOf(999), sections.get(1).getCells().get(1));
+	}
+
+	@Test
+	public void duplicateNameOrHeadCollapsesToOneSection()
+	{
+		List<SectionLayout.Section> sections = new ArrayList<>();
+		sections.add(new SectionLayout.Section(1, 8, "Mining", SectionLayout.cells(1265, SectionLayout.EMPTY)));
+		sections.add(new SectionLayout.Section(1, 8, "Mining", SectionLayout.cells(SectionLayout.EMPTY)));
+		sections.add(new SectionLayout.Section(0, 8, "Woodcutting", SectionLayout.cells(TINDERBOX)));
+		sections.add(new SectionLayout.Section(1, 8, "Woodcutting", SectionLayout.cells(TINDERBOX, LOGS)));
+
+		List<SectionLayout.Section> prepared = SectionLayout.prepare(sections);
+
+		assertEquals(2, prepared.size());
+		assertEquals(1, prepared.get(0).getTab());
+		assertEquals("Mining", prepared.get(0).getName());
+		assertEquals(Integer.valueOf(1265), prepared.get(0).getCells().get(0));
+		assertEquals("Woodcutting", prepared.get(1).getName());
+		assertEquals(Integer.valueOf(LOGS), prepared.get(1).getCells().get(1));
+	}
+
+	@Test
+	public void mainViewShowsEachTabUnderItsOwnTitle()
+	{
+		int oak = 1521;
+		int pick = 1265;
+		int coins = 995;
+		int bow = 841;
+		int arrow = 882;
+		int net = 303;
+		int[] counts = {4, 2, 1, 0, 0, 0, 0, 0, 0};
+		List<SectionLayout.BankItem> items = Arrays.asList(
+			new SectionLayout.BankItem(0, TINDERBOX),
+			new SectionLayout.BankItem(1, oak),
+			new SectionLayout.BankItem(2, LOGS),
+			new SectionLayout.BankItem(3, pick),
+			new SectionLayout.BankItem(4, bow),
+			new SectionLayout.BankItem(5, arrow),
+			new SectionLayout.BankItem(6, net),
+			new SectionLayout.BankItem(7, coins)
+		);
+		List<SectionLayout.Section> sections = new ArrayList<>();
+		sections.add(new SectionLayout.Section(0, 8, "Woodcutting", SectionLayout.cells(TINDERBOX)));
+		sections.add(new SectionLayout.Section(1, 8, "Woodcutting", SectionLayout.cells(TINDERBOX, oak, LOGS, SectionLayout.EMPTY)));
+		sections.add(new SectionLayout.Section(1, 8, "Mining", SectionLayout.cells(pick, SectionLayout.EMPTY)));
+		sections.add(new SectionLayout.Section(2, 8, "Bows", SectionLayout.cells(bow, arrow)));
+
+		SectionLayout.BankView view = SectionLayout.layoutAll(items, counts, SectionLayout.prepare(sections), SectionLayout.spec(8, 24));
+
+		SectionLayout.Placed coin = placed(view, 7);
+		SectionLayout.Placed tinder = placed(view, 0);
+		SectionLayout.Placed oakItem = placed(view, 1);
+		SectionLayout.Placed logs = placed(view, 2);
+		SectionLayout.Placed pickaxe = placed(view, 3);
+		SectionLayout.Placed bowItem = placed(view, 4);
+		SectionLayout.Placed netItem = placed(view, 6);
+
+		assertTrue(coin.getY() < tinder.getY());
+		assertEquals(-1, coin.getSectionIndex());
+		assertEquals(tinder.getY(), oakItem.getY());
+		assertEquals(tinder.getY(), logs.getY());
+		assertTrue(pickaxe.getY() > tinder.getY());
+		assertEquals(1, pickaxe.getTab());
+		assertEquals(1, pickaxe.getSectionIndex());
+		assertTrue(bowItem.getY() > pickaxe.getY());
+		assertEquals(2, bowItem.getTab());
+		assertTrue(netItem.getY() > bowItem.getY());
+		assertEquals(-1, netItem.getSectionIndex());
+
+		assertEquals(3, view.getTabHeadings().size());
+		assertEquals(1, view.getTabHeadings().get(0).getTab());
+		assertEquals(2, view.getTabHeadings().get(1).getTab());
+		assertEquals(3, view.getTabHeadings().get(2).getTab());
+		assertTrue(view.getTabHeadings().get(0).getY() + view.getTabHeadings().get(0).getHeight() <= headerNamed(view, "Woodcutting").getY());
+		assertTrue(headerNamed(view, "Woodcutting").getY() < tinder.getY());
+		assertTrue(headerNamed(view, "Mining").getY() < pickaxe.getY());
+		assertTrue(headerNamed(view, "Bows").getY() < bowItem.getY());
+		assertTrue(view.getTabHeadings().get(0).getY() > coin.getY());
+		assertEquals(BankLayoutPlanner.START_X, view.getTabHeadings().get(0).getX());
+	}
+
 	private static SectionLayout.Slot cell(SectionLayout.Arrangement arranged, int cellIndex)
 	{
 		return cell(arranged, 0, cellIndex);
@@ -184,5 +290,29 @@ public class SectionLayoutTest
 	private static int EMPTY()
 	{
 		return SectionLayout.EMPTY;
+	}
+
+	private static SectionLayout.Placed placed(SectionLayout.BankView view, int bankIndex)
+	{
+		for (SectionLayout.Placed placed : view.getPlaced())
+		{
+			if (placed.getBankIndex() == bankIndex)
+			{
+				return placed;
+			}
+		}
+		throw new AssertionError("missing bank index " + bankIndex);
+	}
+
+	private static SectionLayout.Header headerNamed(SectionLayout.BankView view, String name)
+	{
+		for (SectionLayout.Header header : view.getHeaders())
+		{
+			if (name.equals(header.getName()))
+			{
+				return header;
+			}
+		}
+		throw new AssertionError("missing header " + name);
 	}
 }
