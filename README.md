@@ -22,7 +22,10 @@ The grid is saved per account. It does not depend on the order of items in the r
 - On the all-items view, untabbed items stay at the top. Each numbered tab then gets a bold yellow-orange title, then that tab's loose items, then its smaller orange section labels and grids.
 - The title is the name you set with **Rename tab title** (right-click the tab button, the title itself, or an item in that tab). If you have not set one, it uses Bank Tab Names, then `Tab N`. Leave the box empty to clear your name. **Show tab titles** turns the titles off.
 - Right-click a section heading for **Edit section label**.
-- Drop an item on any cell in a section, including the empty row under the items. Dropping it under another tab's title moves it into that tab and records the cell.
+- In a numbered tab, holes between items stay. Empty space after the last item, and the spare row under a section, appear only while you are dragging. After you let go, unused holes are removed and the row shrinks back.
+- The all-items view packs each section: each brother still has his own row, but holes are not drawn. Turn on **Show empty cells in all-items view** to see them there too.
+- A newly deposited item, or one dropped on a tab button or under a tab title without hitting a section cell, sits in that tab's unsectioned area above the sections. It joins a section only when you drop it on a section cell or give it a label.
+- Shift-right-click an item in a section and choose **Compact section** to close every hole in that section.
 - A placeholder of an item counts as that item, so a section still shows the item if a placeholder is all you have.
 - While bank search is open, headings are hidden and the bank is left as the game drew it.
 - Bank Tags tag tabs, Bank Tag Layouts, and the potion storage are left alone.

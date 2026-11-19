@@ -39,6 +39,7 @@ import net.runelite.api.KeyCode;
 import net.runelite.api.MenuAction;
 import net.runelite.api.ScriptEvent;
 import net.runelite.api.ScriptID;
+import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.ScriptPostFired;
 import net.runelite.api.events.WidgetClosed;
@@ -97,6 +98,7 @@ public class BankSectionLabelsPlugin extends Plugin
 	private static final String REMOVE_FROM_SECTION = "Remove from section";
 	private static final String RESET_TAB = "Reset section labels for this tab";
 	private static final String RENAME_TAB = "Rename tab title";
+	private static final String COMPACT_SECTION = "Compact section";
 	private static final String EXAMINE = "Examine";
 	private static final String VIEW_TAB = "View tab";
 	private static final String PROXY_NAME = "bsl-cell";
@@ -141,7 +143,9 @@ public class BankSectionLabelsPlugin extends Plugin
 	private final Map<Widget, int[]> proxyCells = new HashMap<>();
 	private final Map<Integer, int[]> cellByBankIndex = new HashMap<>();
 	private final List<SectionLayout.Placed> hitSlots = new ArrayList<>();
+	private final List<SectionLayout.TabSpan> tabSpans = new ArrayList<>();
 	private List<SectionLayout.Section> prepared = new ArrayList<>();
+	private boolean dragHoles;
 
 	@Override
 	protected void startUp()
@@ -182,6 +186,30 @@ public class BankSectionLabelsPlugin extends Plugin
 			}
 			return;
 		}
+		relayout();
+	}
+
+	@Subscribe
+	public void onClientTick(ClientTick event)
+	{
+		if (client == null)
+		{
+			return;
+		}
+		boolean dragging = false;
+		try
+		{
+			dragging = layoutAllowed() && client.isDraggingWidget() && isItemWidget(client.getDraggedWidget());
+		}
+		catch (RuntimeException ex)
+		{
+			dragging = false;
+		}
+		if (dragging == dragHoles)
+		{
+			return;
+		}
+		dragHoles = dragging;
 		relayout();
 	}
 
@@ -257,6 +285,13 @@ public class BankSectionLabelsPlugin extends Plugin
 			addMenuEntry(ADD_LABEL, target, () -> promptForLabel(owner, itemId, ""));
 			return;
 		}
+		final int compactTab = placed[0];
+		final int compactIndex = placed[1];
+		addMenuEntry(COMPACT_SECTION, target, () ->
+		{
+			saveOneTab(compactTab, SectionLayout.compactSection(SectionLayout.forTab(prepared, compactTab), compactIndex));
+			relayout();
+		});
 		final int sectionTab = placed[0];
 		final int sectionIndex = placed[1];
 		final int cellIndex = placed[2];
@@ -331,6 +366,7 @@ public class BankSectionLabelsPlugin extends Plugin
 		}
 
 		hideProxies(children);
+		int savedScroll = container.getScrollY();
 		List<SectionLayout.Section> loaded = loadSections();
 		List<SectionLayout.Section> all = SectionLayout.prepare(loaded);
 		if (!SectionLayout.encode(all).equals(SectionLayout.encode(loaded)))
@@ -385,11 +421,11 @@ public class BankSectionLabelsPlugin extends Plugin
 		SectionLayout.BankView view;
 		if (tab == 0)
 		{
-			view = SectionLayout.layoutAll(bankItems, readTabCounts(), normalized(all), spec, config.showTabTitles());
+			view = SectionLayout.layoutAll(bankItems, readTabCounts(), normalized(all), spec, config.showTabTitles(), config.showEmptyCellsAllItems(), dragHoles && config.showEmptyCellsAllItems());
 		}
 		else
 		{
-			view = SectionLayout.layoutTab(bankItems, tab, normalized(SectionLayout.forTab(all, tab)), spec);
+			view = SectionLayout.layoutTab(bankItems, tab, normalized(SectionLayout.forTab(all, tab)), spec, dragHoles);
 			for (Widget separator : separators)
 			{
 				separator.setHidden(true);
@@ -398,6 +434,8 @@ public class BankSectionLabelsPlugin extends Plugin
 
 		cellByBankIndex.clear();
 		hitSlots.clear();
+		tabSpans.clear();
+		tabSpans.addAll(view.getSpans());
 		for (SectionLayout.Placed placed : view.getPlaced())
 		{
 			if (placed.isEmpty())
@@ -446,8 +484,30 @@ public class BankSectionLabelsPlugin extends Plugin
 		}
 
 		int bottom = view.getContentBottom() + BankLayoutPlanner.ROW_STRIDE;
-		int viewport = container.getHeight();
+		int viewport = Math.max(1, container.getHeight());
 		container.setScrollHeight(Math.max(bottom, viewport));
+		int maxScroll = Math.max(0, container.getScrollHeight() - viewport);
+		if (savedScroll > maxScroll)
+		{
+			savedScroll = maxScroll;
+		}
+		if (savedScroll < 0)
+		{
+			savedScroll = 0;
+		}
+		container.setScrollY(savedScroll);
+		try
+		{
+			container.revalidateScroll();
+		}
+		catch (RuntimeException ex)
+		{
+			log.debug("Could not revalidate the bank scroll", ex);
+		}
+		if (client != null)
+		{
+			client.setVarcIntValue(VarClientID.BANK_SCROLLPOS, savedScroll);
+		}
 
 		int headingWidth = layoutColumns * BankLayoutPlanner.COLUMN_STRIDE;
 		List<BankSectionLabelsOverlay.SectionDraw> drawn = new ArrayList<>();
@@ -688,6 +748,7 @@ public class BankSectionLabelsPlugin extends Plugin
 		heading.setHidden(false);
 		heading.setHasListener(true);
 		heading.setNoClickThrough(true);
+		heading.setNoScrollThrough(false);
 		heading.setAction(0, action);
 		heading.setOnOpListener((JavaScriptCallback) ev -> onClick.run());
 		heading.revalidate();
@@ -789,6 +850,36 @@ public class BankSectionLabelsPlugin extends Plugin
 				return;
 			}
 
+			if (destination[1] < 0)
+			{
+				if (sourceSection >= 0)
+				{
+					prepared = SectionLayout.releaseToUnsectioned(prepared, sourceTab, sourceSection, sourceIndex);
+					saveSections(prepared);
+				}
+				if (SectionLayout.movesVanillaTab(sourceTab, destTab))
+				{
+					Widget tabButton = tabButton(destTab);
+					if (tabButton != null)
+					{
+						client.setDraggedOnWidget(tabButton);
+					}
+					else
+					{
+						client.setDraggedOnWidget(null);
+					}
+				}
+				else
+				{
+					client.setDraggedOnWidget(null);
+					if (sourceSection >= 0)
+					{
+						relayout();
+					}
+				}
+				return;
+			}
+
 			boolean moveTab = SectionLayout.movesVanillaTab(sourceTab, destTab);
 			if (moveTab)
 			{
@@ -854,7 +945,17 @@ public class BankSectionLabelsPlugin extends Plugin
 		}
 		int localX = SectionLayout.contentX(mouse.getX(), origin.getX());
 		int localY = SectionLayout.contentY(mouse.getY(), origin.getY(), container.getScrollY());
-		return SectionLayout.hitTest(hitSlots, localX, localY);
+		int[] hit = SectionLayout.hitTest(hitSlots, localX, localY);
+		if (hit != null)
+		{
+			return hit;
+		}
+		int tab = SectionLayout.hitTab(tabSpans, localX, localY);
+		if (tab < 0)
+		{
+			return null;
+		}
+		return new int[]{tab, -1, -1};
 	}
 
 	private void addMenuEntry(String option, String target, Runnable action)
@@ -1099,6 +1200,7 @@ public class BankSectionLabelsPlugin extends Plugin
 	{
 		cellByBankIndex.clear();
 		hitSlots.clear();
+		tabSpans.clear();
 		if (overlay != null)
 		{
 			overlay.setSections(Collections.emptyList());
@@ -1156,6 +1258,7 @@ public class BankSectionLabelsPlugin extends Plugin
 		proxy.setHidden(false);
 		proxy.setHasListener(true);
 		proxy.setNoClickThrough(true);
+		proxy.setNoScrollThrough(false);
 		proxy.setDragParent(container);
 		proxy.setOnDragCompleteListener((JavaScriptCallback) this::onDragComplete);
 		proxy.revalidate();

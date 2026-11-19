@@ -367,7 +367,7 @@ public final class SectionLayout
 			return copy;
 		}
 		section.cells.set(cellIndex, EMPTY);
-		return copy;
+		return tidyAll(copy);
 	}
 
 	/**
@@ -404,14 +404,14 @@ public final class SectionLayout
 			}
 			clearSource(copy, sourceSection, sourceCell);
 			target.cells.set(empty, sourceItemId);
-			return copy;
+			return tidyAll(copy);
 		}
 
 		if (destinationId == EMPTY)
 		{
 			clearSource(copy, sourceSection, sourceCell);
 			target.cells.set(targetCell, sourceItemId);
-			return copy;
+			return tidyAll(copy);
 		}
 
 		if (sourceSection >= 0 && sourceSection < copy.size() && sourceCell >= 0)
@@ -422,20 +422,25 @@ public final class SectionLayout
 				int moving = source.cells.get(sourceCell);
 				source.cells.set(sourceCell, destinationId);
 				target.cells.set(targetCell, moving);
-				return copy;
+				return tidyAll(copy);
 			}
 		}
 
 		target.cells.set(targetCell, sourceItemId);
-		return copy;
+		return tidyAll(copy);
 	}
 
 	public static Arrangement arrange(int looseCount, List<Section> sections, Spec spec)
 	{
-		return arrangeFrom(looseCount, sections, spec, TOP_INSET);
+		return arrangeFrom(looseCount, sections, spec, TOP_INSET, false);
 	}
 
 	public static Arrangement arrangeFrom(int looseCount, List<Section> sections, Spec spec, int startY)
+	{
+		return arrangeFrom(looseCount, sections, spec, startY, false);
+	}
+
+	public static Arrangement arrangeFrom(int looseCount, List<Section> sections, Spec spec, int startY, boolean extraDropRow)
 	{
 		List<Slot> loose = new ArrayList<>();
 		List<Slot> cells = new ArrayList<>();
@@ -469,9 +474,9 @@ public final class SectionLayout
 					cols = spec.columns;
 				}
 				int stored = section.cells.size();
-				int occupiedRows = Math.max(1, (Math.max(1, stored) + cols - 1) / cols);
-				// Always keep one empty row under the items so a drop below an item has a cell.
-				int rows = occupiedRows + 1;
+				int occupiedRows = stored <= 0 ? 0 : (stored + cols - 1) / cols;
+				// The spare row is a drop target only, and only while the caller asks for it.
+				int rows = occupiedRows + (extraDropRow ? 1 : 0);
 				int headerY = y;
 				headers.add(new Header(section.tab, s, section.name, spec.startX, headerY, spec.headerHeight));
 				int itemY = headerY + spec.headerHeight;
@@ -846,19 +851,51 @@ public final class SectionLayout
 		}
 	}
 
+	/** Vertical span of one vanilla tab block, including its title. */
+	public static final class TabSpan
+	{
+		private final int tab;
+		private final int top;
+		private final int bottom;
+
+		TabSpan(int tab, int top, int bottom)
+		{
+			this.tab = tab;
+			this.top = top;
+			this.bottom = bottom;
+		}
+
+		public int getTab()
+		{
+			return tab;
+		}
+
+		public int getTop()
+		{
+			return top;
+		}
+
+		public int getBottom()
+		{
+			return bottom;
+		}
+	}
+
 	public static final class BankView
 	{
 		private final List<Placed> placed;
 		private final List<Header> headers;
 		private final List<TabHeading> tabHeadings;
+		private final List<TabSpan> spans;
 		private final int contentBottom;
 		private final List<Integer> separatorY;
 
-		BankView(List<Placed> placed, List<Header> headers, List<TabHeading> tabHeadings, int contentBottom, List<Integer> separatorY)
+		BankView(List<Placed> placed, List<Header> headers, List<TabHeading> tabHeadings, List<TabSpan> spans, int contentBottom, List<Integer> separatorY)
 		{
 			this.placed = placed;
 			this.headers = headers;
 			this.tabHeadings = tabHeadings;
+			this.spans = spans == null ? Collections.emptyList() : spans;
 			this.contentBottom = contentBottom;
 			this.separatorY = separatorY;
 		}
@@ -876,6 +913,11 @@ public final class SectionLayout
 		public List<TabHeading> getTabHeadings()
 		{
 			return tabHeadings;
+		}
+
+		public List<TabSpan> getSpans()
+		{
+			return spans;
 		}
 
 		public int getContentBottom()
@@ -918,9 +960,17 @@ public final class SectionLayout
 	 */
 	public static BankView layoutTab(List<BankItem> items, int tab, List<Section> sections, Spec spec)
 	{
+		return layoutTab(items, tab, sections, spec, false);
+	}
+
+	public static BankView layoutTab(List<BankItem> items, int tab, List<Section> sections, Spec spec, boolean dragging)
+	{
 		List<BankItem> block = items == null ? new ArrayList<BankItem>() : new ArrayList<>(items);
 		Collections.sort(block, Comparator.comparingInt(item -> item.bankIndex));
-		return layoutBlock(block, tab, dedupe(sections), spec, TOP_INSET);
+		BankView view = layoutBlock(block, tab, dedupe(sections), spec, TOP_INSET, false, dragging);
+		List<TabSpan> spans = new ArrayList<>();
+		spans.add(new TabSpan(tab, TOP_INSET, Math.max(TOP_INSET + 1, view.contentBottom)));
+		return new BankView(view.placed, view.headers, view.tabHeadings, spans, view.contentBottom, view.separatorY);
 	}
 
 	/**
@@ -931,14 +981,20 @@ public final class SectionLayout
 	 */
 	public static BankView layoutAll(List<BankItem> items, int[] tabCounts, List<Section> sections, Spec spec)
 	{
-		return layoutAll(items, tabCounts, sections, spec, true);
+		return layoutAll(items, tabCounts, sections, spec, true, false, false);
 	}
 
 	public static BankView layoutAll(List<BankItem> items, int[] tabCounts, List<Section> sections, Spec spec, boolean tabTitles)
 	{
+		return layoutAll(items, tabCounts, sections, spec, tabTitles, false, false);
+	}
+
+	public static BankView layoutAll(List<BankItem> items, int[] tabCounts, List<Section> sections, Spec spec, boolean tabTitles, boolean showEmpty, boolean dragging)
+	{
 		List<Placed> placed = new ArrayList<>();
 		List<Header> headers = new ArrayList<>();
 		List<TabHeading> tabHeadings = new ArrayList<>();
+		List<TabSpan> spans = new ArrayList<>();
 		List<Integer> breaks = new ArrayList<>();
 		int y = TOP_INSET;
 		boolean any = false;
@@ -979,12 +1035,14 @@ public final class SectionLayout
 				}
 			}
 			any = true;
-			BankView part = layoutBlock(block, tab, dedupe(forTab(sections, tab)), spec, y);
+			int blockTop = tab != 0 && tabTitles ? y - TAB_HEADING_HEIGHT : y;
+			BankView part = layoutBlock(block, tab, dedupe(forTab(sections, tab)), spec, y, !showEmpty, showEmpty && dragging);
 			placed.addAll(part.placed);
 			headers.addAll(part.headers);
+			spans.add(new TabSpan(tab, blockTop, Math.max(blockTop + 1, part.contentBottom)));
 			y = part.contentBottom;
 		}
-		return new BankView(placed, headers, tabHeadings, y, breaks);
+		return new BankView(placed, headers, tabHeadings, spans, y, breaks);
 	}
 
 	/**
@@ -1027,6 +1085,26 @@ public final class SectionLayout
 	}
 
 	/**
+	 * Tab block under a point that missed every section cell. {@code -1} when
+	 * the point is outside every block. Dropping there keeps the item unsectioned.
+	 */
+	public static int hitTab(List<TabSpan> spans, int contentX, int contentY)
+	{
+		if (spans == null || contentX < BankLayoutPlanner.START_X)
+		{
+			return -1;
+		}
+		for (TabSpan span : spans)
+		{
+			if (span != null && contentY >= span.top && contentY < span.bottom)
+			{
+				return span.tab;
+			}
+		}
+		return -1;
+	}
+
+	/**
 	 * A drop onto a different numbered tab has to move the real bank item into
 	 * that tab. A drop inside the same tab only changes the saved grid.
 	 */
@@ -1057,7 +1135,7 @@ public final class SectionLayout
 		return replaceTab(next, destTab, dest);
 	}
 
-	private static BankView layoutBlock(List<BankItem> block, int tab, List<Section> sections, Spec spec, int startY)
+	private static BankView layoutBlock(List<BankItem> block, int tab, List<Section> sections, Spec spec, int startY, boolean packed, boolean dragging)
 	{
 		boolean[] used = new boolean[block.size()];
 		List<int[]> cellMatches = new ArrayList<>();
@@ -1093,9 +1171,12 @@ public final class SectionLayout
 				looseCount++;
 			}
 		}
-		Arrangement arranged = arrangeFrom(looseCount, sections, spec, startY);
+		Arrangement arranged = packed
+			? arrangeFrom(looseCount, Collections.emptyList(), spec, startY, false)
+			: arrangeFrom(looseCount, sections, spec, startY, dragging);
 		List<Placed> placed = new ArrayList<>();
 		int looseOrdinal = 0;
+		int y = startY;
 		for (int i = 0; i < block.size(); i++)
 		{
 			if (used[i])
@@ -1108,9 +1189,66 @@ public final class SectionLayout
 			}
 			Slot slot = arranged.looseSlots.get(looseOrdinal++);
 			placed.add(new Placed(block.get(i).bankIndex, tab, -1, -1, slot.x, slot.y, false));
+			y = Math.max(y, slot.y + spec.rowStride);
+		}
+		if (looseCount > 0)
+		{
+			y = startY + ((looseCount + spec.columns - 1) / spec.columns) * spec.rowStride;
+		}
+		if (packed)
+		{
+			List<Header> headers = new ArrayList<>();
+			if (sections != null)
+			{
+				for (int s = 0; s < sections.size(); s++)
+				{
+					Section section = sections.get(s);
+					int cols = Math.max(1, section.columns);
+					headers.add(new Header(section.tab, s, section.name, spec.startX, y, spec.headerHeight));
+					int rowY = y + spec.headerHeight;
+					int column = 0;
+					boolean rowHasItem = false;
+					int[] matches = s < cellMatches.size() ? cellMatches.get(s) : new int[0];
+					for (int c = 0; c < section.cells.size(); c++)
+					{
+						if (c > 0 && c % cols == 0)
+						{
+							if (rowHasItem)
+							{
+								rowY += spec.rowStride;
+							}
+							column = 0;
+							rowHasItem = false;
+						}
+						int id = section.cells.get(c);
+						if (id < 0)
+						{
+							continue;
+						}
+						int item = c < matches.length ? matches[c] : -1;
+						int x = spec.startX + column * spec.columnStride;
+						if (item >= 0)
+						{
+							placed.add(new Placed(block.get(item).bankIndex, tab, s, c, x, rowY, false));
+						}
+						column++;
+						rowHasItem = true;
+					}
+					if (rowHasItem)
+					{
+						rowY += spec.rowStride;
+					}
+					y = rowY;
+				}
+			}
+			return new BankView(placed, headers, Collections.emptyList(), Collections.emptyList(), y, Collections.emptyList());
 		}
 		for (Slot slot : arranged.cells)
 		{
+			if (slot.empty && !keepHole(sections, slot, dragging))
+			{
+				continue;
+			}
 			if (slot.empty || slot.sectionIndex < 0 || slot.sectionIndex >= cellMatches.size())
 			{
 				placed.add(new Placed(-1, tab, slot.sectionIndex, slot.cellIndex, slot.x, slot.y, true));
@@ -1120,6 +1258,10 @@ public final class SectionLayout
 			int item = slot.cellIndex >= 0 && slot.cellIndex < matches.length ? matches[slot.cellIndex] : -1;
 			if (item < 0)
 			{
+				if (!keepHole(sections, slot, dragging))
+				{
+					continue;
+				}
 				placed.add(new Placed(-1, tab, slot.sectionIndex, slot.cellIndex, slot.x, slot.y, true));
 			}
 			else
@@ -1127,7 +1269,39 @@ public final class SectionLayout
 				placed.add(new Placed(block.get(item).bankIndex, tab, slot.sectionIndex, slot.cellIndex, slot.x, slot.y, false));
 			}
 		}
-		return new BankView(placed, arranged.headers, Collections.emptyList(), arranged.contentBottom, Collections.emptyList());
+		return new BankView(placed, arranged.headers, Collections.emptyList(), Collections.emptyList(), arranged.contentBottom, Collections.emptyList());
+	}
+
+	/** Interior holes stay. Trailing holes and the spare row show only while dragging. */
+	private static boolean keepHole(List<Section> sections, Slot slot, boolean dragging)
+	{
+		if (slot == null || !slot.empty)
+		{
+			return false;
+		}
+		if (dragging)
+		{
+			return true;
+		}
+		if (sections == null || slot.sectionIndex < 0 || slot.sectionIndex >= sections.size())
+		{
+			return false;
+		}
+		Section section = sections.get(slot.sectionIndex);
+		int cols = Math.max(1, section.columns);
+		if (slot.cellIndex >= section.cells.size())
+		{
+			return false;
+		}
+		int rowEnd = Math.min(section.cells.size(), (slot.cellIndex / cols) * cols + cols);
+		for (int i = slot.cellIndex + 1; i < rowEnd; i++)
+		{
+			if (section.cells.get(i) >= 0)
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -1201,7 +1375,157 @@ public final class SectionLayout
 
 	public static List<Section> prepare(List<Section> sections)
 	{
-		return dropTabZeroDuplicates(dedupe(sections));
+		return tidyAll(dropTabZeroDuplicates(dedupe(sections)));
+	}
+
+	/**
+	 * Drop fully empty rows, drop trailing holes on each row, and shrink the
+	 * width to the rightmost item. Holes between two items on the same row stay.
+	 */
+	public static Section tidy(Section section)
+	{
+		if (section == null)
+		{
+			return null;
+		}
+		int cols = Math.max(1, section.columns);
+		List<List<Integer>> rows = new ArrayList<>();
+		for (int i = 0; i < section.cells.size(); i += cols)
+		{
+			List<Integer> row = new ArrayList<>();
+			for (int c = 0; c < cols && i + c < section.cells.size(); c++)
+			{
+				row.add(section.cells.get(i + c));
+			}
+			boolean any = false;
+			for (int id : row)
+			{
+				if (id >= 0)
+				{
+					any = true;
+					break;
+				}
+			}
+			if (any)
+			{
+				rows.add(row);
+			}
+		}
+		int width = 1;
+		boolean anyItem = false;
+		for (List<Integer> row : rows)
+		{
+			for (int c = 0; c < row.size(); c++)
+			{
+				if (row.get(c) >= 0)
+				{
+					anyItem = true;
+					width = Math.max(width, c + 1);
+				}
+			}
+		}
+		if (!anyItem)
+		{
+			return new Section(section.tab, 1, section.name, new ArrayList<Integer>());
+		}
+		List<Integer> cells = new ArrayList<>();
+		for (List<Integer> row : rows)
+		{
+			for (int c = 0; c < width; c++)
+			{
+				cells.add(c < row.size() && row.get(c) != null ? row.get(c) : EMPTY);
+			}
+		}
+		while (!cells.isEmpty() && cells.get(cells.size() - 1) == EMPTY)
+		{
+			cells.remove(cells.size() - 1);
+		}
+		return new Section(section.tab, width, section.name, cells);
+	}
+
+	/**
+	 * Remove every hole, including gaps between items, but keep each occupied
+	 * row on its own line.
+	 */
+	public static Section compact(Section section)
+	{
+		if (section == null)
+		{
+			return null;
+		}
+		int cols = Math.max(1, section.columns);
+		List<List<Integer>> rows = new ArrayList<>();
+		int width = 1;
+		for (int i = 0; i < section.cells.size(); i += cols)
+		{
+			List<Integer> row = new ArrayList<>();
+			for (int c = 0; c < cols && i + c < section.cells.size(); c++)
+			{
+				int id = section.cells.get(i + c);
+				if (id >= 0)
+				{
+					row.add(id);
+				}
+			}
+			if (!row.isEmpty())
+			{
+				width = Math.max(width, row.size());
+				rows.add(row);
+			}
+		}
+		List<Integer> cells = new ArrayList<>();
+		for (List<Integer> row : rows)
+		{
+			cells.addAll(row);
+			for (int c = row.size(); c < width; c++)
+			{
+				cells.add(EMPTY);
+			}
+		}
+		return tidy(new Section(section.tab, Math.max(1, width), section.name, cells));
+	}
+
+	public static List<Section> compactSection(List<Section> sections, int sectionIndex)
+	{
+		List<Section> copy = copyOf(sections);
+		if (sectionIndex < 0 || sectionIndex >= copy.size())
+		{
+			return copy;
+		}
+		copy.set(sectionIndex, compact(copy.get(sectionIndex)));
+		return copy;
+	}
+
+	/**
+	 * Take an item out of whatever section held it. It stays in the tab's
+	 * unsectioned area and is not written into another section.
+	 */
+	public static List<Section> releaseToUnsectioned(List<Section> all, int sourceTab, int sourceSection, int sourceCell)
+	{
+		List<Section> next = all == null ? new ArrayList<Section>() : all;
+		if (sourceSection < 0)
+		{
+			return tidyAll(next);
+		}
+		return replaceTab(next, sourceTab, clearCell(forTab(next, sourceTab), sourceSection, sourceCell));
+	}
+
+	private static List<Section> tidyAll(List<Section> sections)
+	{
+		List<Section> out = new ArrayList<>();
+		if (sections == null)
+		{
+			return out;
+		}
+		for (Section section : sections)
+		{
+			Section tidied = tidy(section);
+			if (tidied != null)
+			{
+				out.add(tidied);
+			}
+		}
+		return out;
 	}
 
 	/**

@@ -131,8 +131,9 @@ public class SectionLayoutTest
 			new SectionLayout.Section(6, 8, "Dharok", SectionLayout.cells(HELM, BODY, SectionLayout.EMPTY, LEGS)));
 
 		List<SectionLayout.Section> moved = SectionLayout.drop(sections, 0, 3, LEGS, 0, 2);
-		assertEquals(Integer.valueOf(EMPTY()), moved.get(0).getCells().get(3));
+		assertEquals(3, moved.get(0).getCells().size());
 		assertEquals(Integer.valueOf(LEGS), moved.get(0).getCells().get(2));
+		assertEquals(3, moved.get(0).getColumns());
 
 		List<SectionLayout.Section> swapped = SectionLayout.drop(sections, 0, 0, HELM, 0, 1);
 		assertEquals(Integer.valueOf(BODY), swapped.get(0).getCells().get(0));
@@ -275,17 +276,104 @@ public class SectionLayoutTest
 	{
 		List<SectionLayout.Section> sections = Collections.singletonList(
 			new SectionLayout.Section(2, 8, "Barrows", SectionLayout.cells(HELM, BODY, LEGS, 4587)));
-		SectionLayout.Arrangement arranged = SectionLayout.arrange(0, sections, SectionLayout.spec(8, 24));
+		SectionLayout.Arrangement idle = SectionLayout.arrange(0, sections, SectionLayout.spec(8, 24));
+		assertTrue(findCell(idle, 8) == null);
 
-		SectionLayout.Slot helm = cell(arranged, 0);
-		SectionLayout.Slot below = cell(arranged, 8);
+		SectionLayout.Arrangement dragging = SectionLayout.arrangeFrom(0, sections, SectionLayout.spec(8, 24), 0, true);
+		SectionLayout.Slot helm = cell(dragging, 0);
+		SectionLayout.Slot below = cell(dragging, 8);
 		assertEquals(helm.getX(), below.getX());
 		assertEquals(helm.getY() + BankLayoutPlanner.ROW_STRIDE, below.getY());
 		assertTrue(below.isEmpty());
 
 		List<SectionLayout.Section> dropped = SectionLayout.drop(sections, -1, -1, 11840, 0, 8);
+		assertEquals(4, dropped.get(0).getColumns());
 		assertEquals(Integer.valueOf(HELM), dropped.get(0).getCells().get(0));
-		assertEquals(Integer.valueOf(11840), dropped.get(0).getCells().get(8));
+		assertEquals(Integer.valueOf(11840), dropped.get(0).getCells().get(4));
+		assertEquals(5, dropped.get(0).getCells().size());
+	}
+
+	@Test
+	public void tidyDropsEmptyRowsAndShrinksWidthButKeepsInteriorGaps()
+	{
+		SectionLayout.Section messy = new SectionLayout.Section(1, 8, "Melee", SectionLayout.cells(
+			HELM, SectionLayout.EMPTY, BODY, SectionLayout.EMPTY, SectionLayout.EMPTY, SectionLayout.EMPTY, SectionLayout.EMPTY, SectionLayout.EMPTY,
+			SectionLayout.EMPTY, SectionLayout.EMPTY, SectionLayout.EMPTY, SectionLayout.EMPTY, SectionLayout.EMPTY, SectionLayout.EMPTY, SectionLayout.EMPTY, SectionLayout.EMPTY));
+		SectionLayout.Section tidy = SectionLayout.tidy(messy);
+		assertEquals(3, tidy.getColumns());
+		assertEquals(SectionLayout.cells(HELM, SectionLayout.EMPTY, BODY), tidy.getCells());
+
+		SectionLayout.Section compact = SectionLayout.compact(tidy);
+		assertEquals(SectionLayout.cells(HELM, BODY), compact.getCells());
+		assertEquals(2, compact.getColumns());
+	}
+
+	@Test
+	public void movingItemsBackTogetherRemovesTheSpareRow()
+	{
+		List<SectionLayout.Section> wide = Collections.singletonList(
+			new SectionLayout.Section(2, 8, "Barrows", SectionLayout.cells(HELM, BODY, LEGS, 4587, SectionLayout.EMPTY, SectionLayout.EMPTY, SectionLayout.EMPTY, SectionLayout.EMPTY, 11840)));
+		List<SectionLayout.Section> together = SectionLayout.drop(wide, 0, 8, 11840, 0, 4);
+		assertEquals(5, together.get(0).getColumns());
+		assertEquals(5, together.get(0).getCells().size());
+		assertEquals(Integer.valueOf(11840), together.get(0).getCells().get(4));
+		assertEquals(Integer.valueOf(HELM), together.get(0).getCells().get(0));
+	}
+
+	@Test
+	public void allItemsViewPacksRowsAndKeepsRowBreaks()
+	{
+		int[] counts = {8, 0, 0, 0, 0, 0, 0, 0, 0};
+		List<SectionLayout.BankItem> items = Arrays.asList(
+			new SectionLayout.BankItem(0, HELM),
+			new SectionLayout.BankItem(1, BODY),
+			new SectionLayout.BankItem(2, LEGS),
+			new SectionLayout.BankItem(3, 4587),
+			new SectionLayout.BankItem(4, 11840),
+			new SectionLayout.BankItem(5, 995)
+		);
+		List<SectionLayout.Section> sections = Collections.singletonList(new SectionLayout.Section(1, 4, "Barrows",
+			SectionLayout.cells(HELM, SectionLayout.EMPTY, BODY, LEGS, 11840, SectionLayout.EMPTY, SectionLayout.EMPTY, SectionLayout.EMPTY)));
+		SectionLayout.BankView packed = SectionLayout.layoutAll(items, counts, sections, SectionLayout.spec(8, 24));
+		for (SectionLayout.Placed placed : packed.getPlaced())
+		{
+			assertTrue(!placed.isEmpty());
+		}
+		SectionLayout.Placed helm = placed(packed, 0);
+		SectionLayout.Placed body = placed(packed, 1);
+		SectionLayout.Placed legs = placed(packed, 2);
+		SectionLayout.Placed nextSet = placed(packed, 4);
+		SectionLayout.Placed coins = placed(packed, 5);
+		assertEquals(helm.getY(), body.getY());
+		assertEquals(helm.getX() + BankLayoutPlanner.COLUMN_STRIDE, body.getX());
+		assertEquals(body.getX() + BankLayoutPlanner.COLUMN_STRIDE, legs.getX());
+		assertTrue(nextSet.getY() > helm.getY());
+		assertEquals(helm.getX(), nextSet.getX());
+		assertTrue(coins.getY() < helm.getY());
+		assertEquals(-1, coins.getSectionIndex());
+		assertTrue(helm.getSectionIndex() >= 0);
+	}
+
+	@Test
+	public void newItemsStayUnsectionedAboveTheSections()
+	{
+		int[] counts = {2, 0, 0, 0, 0, 0, 0, 0, 0};
+		List<SectionLayout.BankItem> items = Arrays.asList(
+			new SectionLayout.BankItem(0, TINDERBOX),
+			new SectionLayout.BankItem(1, 995)
+		);
+		List<SectionLayout.Section> sections = Collections.singletonList(
+			new SectionLayout.Section(1, 8, "Firemaking", SectionLayout.cells(TINDERBOX)));
+		SectionLayout.BankView tab = SectionLayout.layoutTab(items, 1, sections, SectionLayout.spec(8, 24));
+		SectionLayout.BankView all = SectionLayout.layoutAll(items, counts, sections, SectionLayout.spec(8, 24));
+		assertTrue(placed(tab, 1).getY() < placed(tab, 0).getY());
+		assertEquals(-1, placed(tab, 1).getSectionIndex());
+		assertTrue(placed(tab, 0).getSectionIndex() >= 0);
+		assertTrue(placed(all, 1).getY() < placed(all, 0).getY());
+		assertEquals(-1, placed(all, 1).getSectionIndex());
+
+		List<SectionLayout.Section> released = SectionLayout.releaseToUnsectioned(sections, 1, 0, 0);
+		assertTrue(released.get(0).getCells().isEmpty());
 	}
 
 	@Test
@@ -298,7 +386,7 @@ public class SectionLayoutTest
 		);
 		List<SectionLayout.Section> sections = Collections.singletonList(
 			new SectionLayout.Section(1, 8, "Firemaking", SectionLayout.cells(TINDERBOX)));
-		SectionLayout.BankView view = SectionLayout.layoutAll(items, counts, sections, SectionLayout.spec(8, 24));
+		SectionLayout.BankView view = SectionLayout.layoutAll(items, counts, sections, SectionLayout.spec(8, 24), true, true, true);
 
 		SectionLayout.Placed below = null;
 		for (SectionLayout.Placed placed : view.getPlaced())
@@ -340,8 +428,9 @@ public class SectionLayoutTest
 		List<SectionLayout.Section> placed = SectionLayout.placeItem(sections, 0, -1, -1, 882, 2, 0, 8);
 		assertEquals(1, placed.size());
 		assertEquals(2, placed.get(0).getTab());
+		assertEquals(1, placed.get(0).getColumns());
 		assertEquals(Integer.valueOf(841), placed.get(0).getCells().get(0));
-		assertEquals(Integer.valueOf(882), placed.get(0).getCells().get(8));
+		assertEquals(Integer.valueOf(882), placed.get(0).getCells().get(1));
 	}
 
 	@Test
@@ -355,6 +444,18 @@ public class SectionLayoutTest
 		SectionLayout.BankView view = SectionLayout.layoutAll(items, counts, Collections.emptyList(), SectionLayout.spec(8, 24), false);
 		assertTrue(view.getTabHeadings().isEmpty());
 		assertTrue(placed(view, 1).getY() < placed(view, 0).getY());
+	}
+
+	private static SectionLayout.Slot findCell(SectionLayout.Arrangement arranged, int cellIndex)
+	{
+		for (SectionLayout.Slot slot : arranged.getCells())
+		{
+			if (slot.getCellIndex() == cellIndex && slot.getSectionIndex() == 0)
+			{
+				return slot;
+			}
+		}
+		return null;
 	}
 
 	private static SectionLayout.Slot cell(SectionLayout.Arrangement arranged, int cellIndex)

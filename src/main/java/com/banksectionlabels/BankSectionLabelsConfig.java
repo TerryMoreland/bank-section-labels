@@ -104,6 +104,17 @@ public interface BankSectionLabelsConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "showEmptyCellsAllItems",
+		name = "Show empty cells in all-items view",
+		description = "Off packs each section into its rows in the main view, with no placeholder holes. On shows the same holes as the numbered tab",
+		position = 9
+	)
+	default boolean showEmptyCellsAllItems()
+	{
+		return false;
+	}
+
+	@ConfigItem(
 		keyName = "showTabTitles",
 		name = "Show tab titles",
 		description = "On the all-items view, draw a title above each numbered tab. Your own names override Bank Tab Names",
